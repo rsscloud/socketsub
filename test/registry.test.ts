@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { fixture } from './support/fake-net.js';
+import { setImmediate } from 'node:timers/promises';
+import { fixture, gate } from './support/fake-net.js';
 import {
     fakeCloud,
     recordingClient,
@@ -43,7 +44,7 @@ describe('registry', () => {
         await settle();
         expect(net.to(FEED)).toHaveLength(1);
 
-        registry.notifyRssCloud(FEED);
+        registry.rssCloud.notify(FEED);
         expect(a.messages.at(-1)).toEqual({ type: 'update', url: FEED });
         expect(b.messages.at(-1)).toEqual({
             type: 'update',
@@ -73,8 +74,8 @@ describe('registry', () => {
         registry.add(client, [other]);
         await settle();
         client.messages.length = 0;
-        registry.notifyRssCloud(FEED);
-        registry.notifyRssCloud(other);
+        registry.rssCloud.notify(FEED);
+        registry.rssCloud.notify(other);
         expect(client.messages).toEqual([
             { type: 'update', url: FEED },
             { type: 'update', url: other }
@@ -92,7 +93,7 @@ describe('registry', () => {
         const client = recordingClient();
         registry.add(client, ['http://old.example/rss']);
         await settle();
-        registry.notifyRssCloud(FEED);
+        registry.rssCloud.notify(FEED);
         expect(client.messages.at(-1)).toEqual({
             type: 'update',
             url: 'http://old.example/rss'
@@ -140,17 +141,16 @@ describe('registry', () => {
 
     it('stops sending to a client after it leaves, even mid-discovery', async () => {
         const { net, registry } = setup();
-        let release!: () => void;
-        const gate = new Promise<void>(r => (release = r));
+        const held = gate();
         net.on(FEED, async () => {
-            await gate;
+            await held.wait();
             return new Response(fixture('none.xml'));
         });
         const client = recordingClient();
         registry.add(client, [FEED]);
         await settle();
         registry.removeClient(client);
-        release();
+        held.release();
         await settle();
         expect(client.messages).toEqual([
             { type: 'status', url: FEED, state: 'pending' }
@@ -232,14 +232,15 @@ describe('registry', () => {
             net.on(url, async () => {
                 inFlight++;
                 peak = Math.max(peak, inFlight);
-                await settle(2);
+                await setImmediate();
+                await setImmediate();
                 inFlight--;
                 return new Response(fixture('none.xml'));
             });
         }
         const client = recordingClient();
         registry.add(client, urls);
-        await settle(60);
+        await settle();
         expect(peak).toBe(2);
         expect(
             client.messages.filter(

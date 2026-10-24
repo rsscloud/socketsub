@@ -4,8 +4,8 @@ import { setImmediate } from 'node:timers/promises';
 import { serve } from '@hono/node-server';
 import { createApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
-import type { Client, ServerMessage } from '../../src/registry.js';
-import { createFakeNet } from './fake-net.js';
+import type { Client, ServerMessage } from '../../src/messages.js';
+import { createFakeNet, netActivity } from './fake-net.js';
 
 export function testConfig(env: Record<string, string> = {}) {
     return loadConfig({ PUBLIC_URL: 'https://sub.example', ...env });
@@ -29,8 +29,24 @@ export function recordingClient(): RecordingClient {
     return { messages, send: message => void messages.push(message) };
 }
 
-export async function settle(rounds = 20) {
-    for (let i = 0; i < rounds; i++) await setImmediate();
+const IDLE_TURNS = 2;
+const MAX_TURNS = 1000;
+
+export async function settle() {
+    let idle = 0;
+    let seen = -1;
+    for (let turn = 0; turn < MAX_TURNS; turn++) {
+        await setImmediate();
+        const { inFlight, gated, events } = netActivity();
+        const quiet = inFlight === gated && events === seen;
+        seen = events;
+        idle = quiet ? idle + 1 : 0;
+        if (idle >= IDLE_TURNS) return;
+    }
+    const { inFlight, gated } = netActivity();
+    throw new Error(
+        `settle(): not idle after ${MAX_TURNS} turns (${inFlight - gated} requests in flight)`
+    );
 }
 
 export async function listen(app: ReturnType<typeof setup>) {

@@ -1,3 +1,6 @@
+import { MAX_TIMER_MS } from './timer.js';
+import { isHttpUrl } from './url.js';
+
 export type RssCloudCallback = {
     domain: string;
     port: number;
@@ -8,8 +11,8 @@ export type RssCloudCallback = {
 export type Config = {
     port: number;
     publicUrl: URL;
-    rsscloudRenewMs: number;
-    websubLeaseSeconds: number;
+    rssCloudRenewMs: number;
+    webSubLeaseSeconds: number;
     maxFeedsPerMessage: number;
     maxFeedsPerClient: number;
     maxFeeds: number;
@@ -20,21 +23,18 @@ export type Config = {
 
 type Env = Record<string, string | undefined>;
 
-// Node fires any longer setTimeout after 1 ms.
-export const MAX_TIMER_MS = 2 ** 31 - 1;
-
 export function loadConfig(env: Env): Config {
     return {
         port: positiveInt(env, 'PORT', 3000, 65535),
         publicUrl: publicUrl(env.PUBLIC_URL),
-        rsscloudRenewMs:
+        rssCloudRenewMs:
             positiveInt(
                 env,
                 'RSSCLOUD_RENEW_HOURS',
                 24,
                 Math.floor(MAX_TIMER_MS / 3600_000)
             ) * 3600_000,
-        websubLeaseSeconds: positiveInt(env, 'WEBSUB_LEASE_SECONDS', 86400),
+        webSubLeaseSeconds: positiveInt(env, 'WEBSUB_LEASE_SECONDS', 86400),
         maxFeedsPerMessage: positiveInt(env, 'MAX_FEEDS_PER_MESSAGE', 500),
         maxFeedsPerClient: positiveInt(env, 'MAX_FEEDS_PER_CLIENT', 1000),
         maxFeeds: positiveInt(env, 'MAX_FEEDS', 10000),
@@ -54,7 +54,7 @@ export function callbackUrl(config: Config, path: string): string {
     return `${base}${path}`;
 }
 
-export function rsscloudCallback(config: Config): RssCloudCallback {
+export function rssCloudCallback(config: Config): RssCloudCallback {
     const url = config.publicUrl;
     const https = url.protocol === 'https:';
     return {
@@ -73,7 +73,7 @@ function publicUrl(raw: string | undefined): URL {
     } catch {
         throw new Error(`PUBLIC_URL is not a valid URL: ${raw}`);
     }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    if (!isHttpUrl(url)) {
         throw new Error(`PUBLIC_URL must be http or https: ${raw}`);
     }
     if (url.search || url.hash) {

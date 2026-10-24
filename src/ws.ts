@@ -1,5 +1,6 @@
 import type { UpgradeWebSocket } from 'hono/ws';
-import type { Client, Registry } from './registry.js';
+import type { Client } from './messages.js';
+import type { Registry } from './registry.js';
 
 type ParsedMessage =
     { ok: true; urls: string[] } | { ok: false; message: string };
@@ -43,7 +44,7 @@ export function wsHandler(
             onOpen(_event, ws) {
                 client = {
                     send(message) {
-                        if (ws.readyState === 1) {
+                        if (ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify(message));
                         }
                     }

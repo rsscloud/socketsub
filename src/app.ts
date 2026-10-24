@@ -4,9 +4,11 @@ import { Hono } from 'hono';
 import type { Config } from './config.js';
 import { createFetcher, type Lookup } from './net.js';
 import { createRegistry } from './registry.js';
-import { rsscloudRoutes } from './rsscloud.js';
-import { websubRoutes } from './websub.js';
+import { rssCloudRoutes } from './rsscloud/routes.js';
+import { webSubRoutes } from './websub/routes.js';
 import { wsHandler } from './ws.js';
+
+const MAX_WS_MESSAGE_BYTES = 1024 * 1024;
 
 export type AppDeps = {
     config: Config;
@@ -27,7 +29,7 @@ export function createApp(deps: AppDeps) {
     });
     // @hono/node-ws takes no ws options, but ws reads maxPayload from
     // wss.options on each upgrade. Larger messages close with 1009.
-    wss.options.maxPayload = 1024 * 1024;
+    wss.options.maxPayload = MAX_WS_MESSAGE_BYTES;
     const fetcher = createFetcher({
         fetch: deps.fetch,
         lookup: deps.lookup,
@@ -38,8 +40,8 @@ export function createApp(deps: AppDeps) {
 
     app.get('/', c => c.html(testClientPage));
     app.get('/health', c => c.json({ ok: true }));
-    app.route('/rsscloud', rsscloudRoutes(registry));
-    app.route('/websub', websubRoutes(registry));
+    app.route('/rsscloud', rssCloudRoutes(registry.rssCloud));
+    app.route('/websub', webSubRoutes(registry.webSub));
     app.get(
         '/ws',
         wsHandler(upgradeWebSocket, registry, config.maxFeedsPerMessage)

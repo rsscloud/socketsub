@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixture } from './support/fake-net.js';
+import { fixture, gate } from './support/fake-net.js';
 import {
     fakeCloud,
     fakeHub,
@@ -286,11 +286,10 @@ describe('WebSub teardown', () => {
 
     it('unsubscribes and refuses late verification when the client leaves mid-subscribe', async () => {
         const s = hubFeed();
-        let release!: () => void;
-        const gate = new Promise<void>(r => (release = r));
+        const held = gate();
         const hub = fakeHub(s, HUB);
         s.net.on(HUB, async request => {
-            if (request.form.get('hub.mode') === 'subscribe') await gate;
+            if (request.form.get('hub.mode') === 'subscribe') await held.wait();
             return new Response(null, { status: 202 });
         });
         const client = recordingClient();
@@ -304,7 +303,7 @@ describe('WebSub teardown', () => {
         const sent = client.messages.length;
         expect(hub.unsubscribes()).toHaveLength(1);
 
-        release();
+        held.release();
         await settle();
         expect((await hub.verify(subscribe)).status).toBe(404);
         expect(await (await hub.verify(hub.unsubscribes()[0])).text()).toBe(
@@ -322,12 +321,19 @@ describe('WebSub renewal', () => {
         vi.useRealTimers();
     });
 
-    it('resubscribes at 90% of the lease the hub granted', async () => {
+    async function verifiedWithLease(leaseSeconds: string) {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
         s.registry.add(recordingClient(), [FEED]);
         await settle();
-        await hub.verify(hub.subscribes()[0], { 'hub.lease_seconds': '1000' });
+        await hub.verify(hub.subscribes()[0], {
+            'hub.lease_seconds': leaseSeconds
+        });
+        return hub;
+    }
+
+    it('resubscribes at 90% of the lease the hub granted', async () => {
+        const hub = await verifiedWithLease('1000');
 
         await vi.advanceTimersByTimeAsync(899_999);
         expect(hub.subscribes()).toHaveLength(1);
@@ -337,6 +343,13 @@ describe('WebSub renewal', () => {
         expect(hub.subscribes()[1]?.form.get('hub.callback')).toBe(
             hub.subscribes()[0]?.form.get('hub.callback')
         );
+    });
+
+    it('schedules the next renewal from the lease the renewal verification granted', async () => {
+        const hub = await verifiedWithLease('1000');
+        await vi.advanceTimersByTimeAsync(900_000);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(2);
 
         await hub.verify(hub.subscribes()[1], { 'hub.lease_seconds': '2000' });
         await vi.advanceTimersByTimeAsync(1_799_999);

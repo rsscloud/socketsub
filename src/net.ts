@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
+import { isHttpUrl } from './url.js';
 
 export type FetchResult = {
     status: number;
@@ -18,6 +19,8 @@ export type Fetcher = (
     request?: FetchRequest
 ) => Promise<FetchResult>;
 
+export type RequestResult = { ok: true } | { ok: false; reason: string };
+
 export type Lookup = (hostname: string) => Promise<string[]>;
 
 export const systemLookup: Lookup = async hostname =>
@@ -32,6 +35,7 @@ export type FetcherDeps = {
 
 const MAX_REDIRECTS = 5;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
+const BODY_TOO_LARGE = `response is larger than ${MAX_BODY_BYTES / (1024 * 1024)} MB`;
 
 const blocked = new BlockList();
 for (const [network, prefix] of [
@@ -73,7 +77,7 @@ export function isPrivateAddress(address: string): boolean {
 
 export function createFetcher(deps: FetcherDeps): Fetcher {
     async function assertAllowed(url: URL) {
-        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        if (!isHttpUrl(url)) {
             throw new Error(`refusing ${url.protocol} URL`);
         }
         if (deps.allowPrivateHosts) return;
@@ -110,28 +114,37 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
                 status: res.status,
                 url: current.href,
                 headers: res.headers,
-                body: await readCapped(res, MAX_BODY_BYTES)
+                body: await readCapped(res)
             };
         }
     };
 }
 
-async function readCapped(res: Response, maxBytes: number): Promise<string> {
-    if (Number(res.headers.get('content-length')) > maxBytes) {
+async function readCapped(res: Response): Promise<string> {
+    if (Number(res.headers.get('content-length')) > MAX_BODY_BYTES) {
         await res.body?.cancel();
-        throw new Error('response is larger than 5 MB');
+        throw new Error(BODY_TOO_LARGE);
     }
     if (!res.body) return '';
     const chunks: Uint8Array[] = [];
     let total = 0;
     for await (const chunk of res.body) {
         total += chunk.byteLength;
-        if (total > maxBytes) {
-            throw new Error('response is larger than 5 MB');
-        }
+        if (total > MAX_BODY_BYTES) throw new Error(BODY_TOO_LARGE);
         chunks.push(chunk);
     }
     return Buffer.concat(chunks).toString('utf8');
+}
+
+export function errorText(err: unknown): string {
+    if (err instanceof Error) {
+        return err.name === 'TimeoutError' ? 'request timed out' : err.message;
+    }
+    return String(err);
+}
+
+export function isSuccessStatus(status: number): boolean {
+    return status >= 200 && status < 300;
 }
 
 function isRedirect(status: number): boolean {

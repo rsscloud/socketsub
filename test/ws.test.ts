@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fixture } from './support/fake-net.js';
-import type { ServerMessage } from '../src/registry.js';
+import type { ServerMessage } from '../src/messages.js';
 import { fakeCloud, listen, setup, WsClient } from './support/harness.js';
 
 const FEED = 'https://blog.example/feed.xml';
