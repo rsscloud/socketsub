@@ -8,6 +8,7 @@ import {
 import { discover, type Discovery } from './discover.js';
 import type { Fetcher } from './net.js';
 import { pleaseNotify, type NotifyResult } from './rsscloud.js';
+import { normalizeUrl, sameUrl } from './url.js';
 import { hubRequest, type HubResult } from './websub.js';
 
 export type Via = 'rsscloud' | 'websub';
@@ -32,6 +33,9 @@ export type FeedKey = string & { __brand: 'FeedKey' };
 type Timer = ReturnType<typeof setTimeout>;
 
 const UNSUBSCRIBE_VERIFY_WINDOW_MS = 10 * 60_000;
+const RENEW_AT_LEASE_FRACTION = 0.9;
+const MIN_RENEW_SECONDS = 60;
+const SECRET_BYTES = 24;
 
 type RssCloudTarget = { endpoint: URL; topic: string };
 
@@ -76,20 +80,6 @@ export type RegistryDeps = {
 export function toFeedKey(raw: string): FeedKey | undefined {
     const href = normalizeUrl(raw);
     return href === undefined ? undefined : (href as FeedKey);
-}
-
-function normalizeUrl(raw: string): string | undefined {
-    let url: URL;
-    try {
-        url = new URL(raw.trim());
-    } catch {
-        return undefined;
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        return undefined;
-    }
-    url.hash = '';
-    return url.href;
 }
 
 export function createRegistry(deps: RegistryDeps) {
@@ -254,7 +244,7 @@ export function createRegistry(deps: RegistryDeps) {
         const target: WebSubTarget = {
             ...found,
             id: randomUUID(),
-            secret: randomBytes(24).toString('hex')
+            secret: randomBytes(SECRET_BYTES).toString('hex')
         };
         addAlias(feed, target.topic);
         websubFeeds.set(target.id, feed.key);
@@ -313,8 +303,14 @@ export function createRegistry(deps: RegistryDeps) {
         target: WebSubTarget,
         leaseSeconds: number
     ): Timer {
-        const renewSeconds = Math.max(60, Math.floor(leaseSeconds * 0.9));
-        const graceSeconds = Math.max(60, leaseSeconds - renewSeconds);
+        const renewSeconds = Math.max(
+            MIN_RENEW_SECONDS,
+            Math.floor(leaseSeconds * RENEW_AT_LEASE_FRACTION)
+        );
+        const graceSeconds = Math.max(
+            MIN_RENEW_SECONDS,
+            leaseSeconds - renewSeconds
+        );
         const fail = (reason: string) => {
             websubFeeds.delete(target.id);
             setState(feed, { kind: 'failed', via: 'websub', reason });
@@ -553,10 +549,6 @@ function sameStatus(a: FeedState, b: FeedState): boolean {
 
 function schedule(task: () => void, delayMs: number): Timer {
     return setTimeout(task, Math.min(delayMs, MAX_TIMER_MS));
-}
-
-function sameUrl(a: string, b: string): boolean {
-    return (normalizeUrl(a) ?? a) === (normalizeUrl(b) ?? b);
 }
 
 function errorText(err: unknown): string {

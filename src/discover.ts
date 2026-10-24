@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
-import type { Fetcher } from './net.js';
+import { isSuccessStatus, type Fetcher } from './net.js';
+import { isHttpUrl } from './url.js';
 
 export type Discovery = {
     finalUrl: string;
@@ -29,7 +30,7 @@ export async function discover(
     const res = await fetcher(url, {
         accept: 'application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8'
     });
-    if (res.status < 200 || res.status >= 300) {
+    if (!isSuccessStatus(res.status)) {
         throw new Error(`feed returned HTTP ${res.status}`);
     }
     return parseDiscovery(res.url, res.body, res.headers.get('link'));
@@ -55,7 +56,7 @@ export function parseDiscovery(
     });
     const hub = links.find(link => link.rels.includes('hub'))?.href;
     const self = links.find(link => link.rels.includes('self'))?.href;
-    if (hub && isHttp(hub)) {
+    if (hub && isHttpUrl(hub)) {
         discovery.websub = { hub, topic: self?.href ?? finalUrl };
     }
     return discovery;
@@ -131,7 +132,7 @@ function sourceCloud(feed: Element[]): URL | undefined {
     for (const el of feed) {
         if (el.name !== 'cloud' || !isSourceNs(el.ns)) continue;
         const url = resolve(text(el.node));
-        if (url && isHttp(url)) return url;
+        if (url && isHttpUrl(url)) return url;
     }
     return undefined;
 }
@@ -191,8 +192,4 @@ function resolve(href: string, base?: string): URL | undefined {
     } catch {
         return undefined;
     }
-}
-
-function isHttp(url: URL): boolean {
-    return url.protocol === 'http:' || url.protocol === 'https:';
 }

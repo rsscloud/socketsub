@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import type { Fetcher } from './net.js';
+import { isSuccessStatus, type Fetcher } from './net.js';
 import type { Registry } from './registry.js';
 
 export type HubRequest =
@@ -34,7 +34,7 @@ export async function hubRequest(
         form.set('hub.secret', request.secret);
     }
     const res = await fetcher(hub.href, { form });
-    if (res.status >= 200 && res.status < 300) return { ok: true };
+    if (isSuccessStatus(res.status)) return { ok: true };
     const body = res.body.trim().slice(0, 200);
     return {
         ok: false,
@@ -60,9 +60,11 @@ export function signatureValid(
     return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
+const DELIVERY_BODY_LIMIT_BYTES = 10 * 1024 * 1024;
+
 export function websubRoutes(registry: Registry) {
     const routes = new Hono();
-    routes.use(bodyLimit({ maxSize: 10 * 1024 * 1024 }));
+    routes.use(bodyLimit({ maxSize: DELIVERY_BODY_LIMIT_BYTES }));
 
     routes.get('/:id', c => {
         const id = c.req.param('id');

@@ -43,7 +43,7 @@ export function wsHandler(
             onOpen(_event, ws) {
                 client = {
                     send(message) {
-                        if (ws.readyState === 1) {
+                        if (ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify(message));
                         }
                     }

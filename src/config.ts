@@ -1,3 +1,5 @@
+import { isHttpUrl } from './url.js';
+
 export type RssCloudCallback = {
     domain: string;
     port: number;
@@ -73,7 +75,7 @@ function publicUrl(raw: string | undefined): URL {
     } catch {
         throw new Error(`PUBLIC_URL is not a valid URL: ${raw}`);
     }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    if (!isHttpUrl(url)) {
         throw new Error(`PUBLIC_URL must be http or https: ${raw}`);
     }
     if (url.search || url.hash) {

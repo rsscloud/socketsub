@@ -8,6 +8,8 @@ import { rsscloudRoutes } from './rsscloud.js';
 import { websubRoutes } from './websub.js';
 import { wsHandler } from './ws.js';
 
+const MAX_WS_MESSAGE_BYTES = 1024 * 1024;
+
 export type AppDeps = {
     config: Config;
     fetch: typeof fetch;
@@ -27,7 +29,7 @@ export function createApp(deps: AppDeps) {
     });
     // @hono/node-ws takes no ws options, but ws reads maxPayload from
     // wss.options on each upgrade. Larger messages close with 1009.
-    wss.options.maxPayload = 1024 * 1024;
+    wss.options.maxPayload = MAX_WS_MESSAGE_BYTES;
     const fetcher = createFetcher({
         fetch: deps.fetch,
         lookup: deps.lookup,
