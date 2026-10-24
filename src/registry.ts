@@ -128,6 +128,26 @@ export function createRegistry(deps: RegistryDeps) {
         return { feed, state };
     }
 
+    function rssCloudFeeds(url: string): FeedSub[] {
+        const alias = normalizeUrl(url);
+        const keys = alias === undefined ? undefined : aliasIndex.get(alias);
+        return [...(keys ?? [])].flatMap(key => {
+            const feed = feeds.get(key);
+            const state = feed?.state;
+            return feed &&
+                (state?.kind === 'subscribing' || state?.kind === 'active') &&
+                state.via === 'rsscloud'
+                ? [feed]
+                : [];
+        });
+    }
+
+    function sendUpdate(feed: FeedSub) {
+        for (const [client, original] of feed.clients) {
+            client.send({ type: 'update', url: original });
+        }
+    }
+
     function drop(feed: FeedSub) {
         const { state } = feed;
         cancelRenewal(state);
@@ -403,17 +423,11 @@ export function createRegistry(deps: RegistryDeps) {
         },
 
         acceptsRssCloudChallenge(url: string): boolean {
-            const alias = normalizeUrl(url);
-            const keys =
-                alias === undefined ? undefined : aliasIndex.get(alias);
-            return [...(keys ?? [])].some(key => {
-                const state = feeds.get(key)?.state;
-                return (
-                    (state?.kind === 'subscribing' ||
-                        state?.kind === 'active') &&
-                    state.via === 'rsscloud'
-                );
-            });
+            return rssCloudFeeds(url).length > 0;
+        },
+
+        notifyRssCloud(url: string) {
+            for (const feed of rssCloudFeeds(url)) sendUpdate(feed);
         },
 
         verifyWebSub(
@@ -462,26 +476,13 @@ export function createRegistry(deps: RegistryDeps) {
             });
         },
 
-        webSubSubscription(
-            id: string
-        ): { secret: string; topic: string } | undefined {
-            const target = webSubFeed(id)?.state.target;
-            return target && { secret: target.secret, topic: target.topic };
+        webSubSecret(id: string): string | undefined {
+            return webSubFeed(id)?.state.target.secret;
         },
 
-        notify(url: string): boolean {
-            const alias = normalizeUrl(url);
-            const keys =
-                alias === undefined ? undefined : aliasIndex.get(alias);
-            if (!keys) return false;
-            for (const key of keys) {
-                const feed = feeds.get(key);
-                if (!feed) continue;
-                for (const [client, original] of feed.clients) {
-                    client.send({ type: 'update', url: original });
-                }
-            }
-            return true;
+        notifyWebSub(id: string) {
+            const found = webSubFeed(id);
+            if (found) sendUpdate(found.feed);
         }
     };
 }

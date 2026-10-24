@@ -134,6 +134,30 @@ describe('rssCloud callback routes', () => {
         expect(bystander.messages.some(m => m.type === 'update')).toBe(false);
     });
 
+    it.each([
+        ['WebSub', 'atom-hub.xml'],
+        ['no push protocol', 'none.xml']
+    ])(
+        'ignores a notify POST for a feed using %s',
+        async (_label, feedFixture) => {
+            const s = setup();
+            s.net.feed(FEED, fixture(feedFixture));
+            s.net.on(
+                'https://hub.example/',
+                () => new Response(null, { status: 202 })
+            );
+            const client = recordingClient();
+            s.registry.add(client, [FEED]);
+            await settle();
+
+            await s.app.request('/rsscloud/notify', {
+                method: 'POST',
+                body: new URLSearchParams({ url: FEED })
+            });
+            expect(client.messages.some(m => m.type === 'update')).toBe(false);
+        }
+    );
+
     it('refuses a notify POST body over 1 MiB', async () => {
         const s = setup();
         const res = await s.app.request('/rsscloud/notify', {

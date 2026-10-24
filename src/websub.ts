@@ -92,17 +92,12 @@ export function websubRoutes(registry: Registry) {
     });
 
     routes.post('/:id', async c => {
-        const subscription = registry.webSubSubscription(c.req.param('id'));
-        if (!subscription) return c.body(null, 410);
+        const id = c.req.param('id');
+        const secret = registry.webSubSecret(id);
+        if (secret === undefined) return c.body(null, 410);
         const body = new Uint8Array(await c.req.arrayBuffer());
-        if (
-            signatureValid(
-                subscription.secret,
-                c.req.header('x-hub-signature'),
-                body
-            )
-        ) {
-            registry.notify(subscription.topic);
+        if (signatureValid(secret, c.req.header('x-hub-signature'), body)) {
+            registry.notifyWebSub(id);
         }
         return c.body(null, 204);
     });

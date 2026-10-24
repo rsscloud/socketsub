@@ -80,7 +80,7 @@ export function rsscloudRoutes(registry: Registry) {
     routes.post('/notify', async c => {
         const body = await c.req.parseBody();
         const url = body.url;
-        if (typeof url === 'string') registry.notify(url);
+        if (typeof url === 'string') registry.notifyRssCloud(url);
         return c.text('ok');
     });
 

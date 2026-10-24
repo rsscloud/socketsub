@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { fixture } from './support/fake-net.js';
-import { recordingClient, settle, setup } from './support/harness.js';
+import {
+    fakeCloud,
+    recordingClient,
+    settle,
+    setup
+} from './support/harness.js';
 
 const FEED = 'https://blog.example/feed.xml';
+
+function cloudSetup() {
+    const s = setup();
+    fakeCloud(s, 'http://rpc.rsscloud.example:5337/pleaseNotify');
+    return s;
+}
 
 describe('registry', () => {
     it('reports pending, then unsupported for a feed with no push protocol', async () => {
@@ -23,8 +34,8 @@ describe('registry', () => {
     });
 
     it('fetches a feed once for two clients and answers each with its own string', async () => {
-        const { net, registry } = setup();
-        net.feed(FEED, fixture('none.xml'));
+        const { net, registry } = cloudSetup();
+        net.feed(FEED, fixture('rss-cloud.xml'));
         const a = recordingClient();
         const b = recordingClient();
         registry.add(a, [FEED]);
@@ -32,7 +43,7 @@ describe('registry', () => {
         await settle();
         expect(net.to(FEED)).toHaveLength(1);
 
-        registry.notify(FEED);
+        registry.notifyRssCloud(FEED);
         expect(a.messages.at(-1)).toEqual({ type: 'update', url: FEED });
         expect(b.messages.at(-1)).toEqual({
             type: 'update',
@@ -53,17 +64,17 @@ describe('registry', () => {
     });
 
     it('adds arrays to the client set instead of replacing it', async () => {
-        const { net, registry } = setup();
+        const { net, registry } = cloudSetup();
         const other = 'https://other.example/rss';
-        net.feed(FEED, fixture('none.xml'));
-        net.feed(other, fixture('none.xml'));
+        net.feed(FEED, fixture('rss-cloud.xml'));
+        net.feed(other, fixture('rss-cloud.xml'));
         const client = recordingClient();
         registry.add(client, [FEED]);
         registry.add(client, [other]);
         await settle();
         client.messages.length = 0;
-        registry.notify(FEED);
-        registry.notify(other);
+        registry.notifyRssCloud(FEED);
+        registry.notifyRssCloud(other);
         expect(client.messages).toEqual([
             { type: 'update', url: FEED },
             { type: 'update', url: other }
@@ -71,17 +82,17 @@ describe('registry', () => {
     });
 
     it('routes notifications for the redirect target to the original string', async () => {
-        const { net, registry } = setup();
+        const { net, registry } = cloudSetup();
         net.on(
             'http://old.example/rss',
             () =>
                 new Response(null, { status: 301, headers: { location: FEED } })
         );
-        net.feed(FEED, fixture('none.xml'));
+        net.feed(FEED, fixture('rss-cloud.xml'));
         const client = recordingClient();
         registry.add(client, ['http://old.example/rss']);
         await settle();
-        registry.notify(FEED);
+        registry.notifyRssCloud(FEED);
         expect(client.messages.at(-1)).toEqual({
             type: 'update',
             url: 'http://old.example/rss'
@@ -144,7 +155,6 @@ describe('registry', () => {
         expect(client.messages).toEqual([
             { type: 'status', url: FEED, state: 'pending' }
         ]);
-        expect(registry.notify(FEED)).toBe(false);
     });
 
     it('limits concurrent discovery', async () => {

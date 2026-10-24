@@ -196,6 +196,31 @@ describe('WebSub delivery', () => {
         }
     );
 
+    it('delivers only to the subscription it was addressed to', async () => {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        const alias = 'http://old.example/atom';
+        s.net.on(
+            alias,
+            () =>
+                new Response(null, { status: 301, headers: { location: FEED } })
+        );
+        const direct = recordingClient();
+        const redirected = recordingClient();
+        s.registry.add(direct, [FEED]);
+        s.registry.add(redirected, [alias]);
+        await settle();
+        const [first, second] = hub.subscribes();
+        await hub.verify(first);
+        await hub.verify(second);
+
+        await hub.deliver(first, '<feed/>', sign('sha256'));
+        const updates = [direct, redirected].map(
+            c => c.messages.filter(m => m.type === 'update').length
+        );
+        expect(updates).toEqual([1, 0]);
+    });
+
     it('acknowledges but ignores a bad or missing signature', async () => {
         const { hub, client, request } = await subscribed();
         const before = client.messages.length;
