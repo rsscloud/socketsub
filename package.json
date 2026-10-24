@@ -1,0 +1,64 @@
+{
+    "name": "socketsub",
+    "version": "0.0.0",
+    "private": true,
+    "description": "WebSocket bridge that forwards rssCloud and WebSub feed update notifications to connected clients",
+    "type": "module",
+    "main": "dist/index.js",
+    "engines": {
+        "node": ">=24"
+    },
+    "packageManager": "pnpm@10.11.0",
+    "scripts": {
+        "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+        "start": "node --env-file-if-exists=.env dist/index.js",
+        "build": "tsc -p tsconfig.build.json",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint .",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "docker:build-push": "./scripts/docker-build-push.sh",
+        "docker:dry-run": "./scripts/docker-build-push.sh --dry-run",
+        "prepare": "husky"
+    },
+    "author": "Andrew Shell <andrew@andrewshell.org>",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/rsscloud/socketsub.git"
+    },
+    "bugs": {
+        "url": "https://github.com/rsscloud/socketsub/issues"
+    },
+    "homepage": "https://github.com/rsscloud/socketsub#readme",
+    "lint-staged": {
+        "*.{ts,js,mjs,json,md,yml,yaml,html}": "prettier --write"
+    },
+    "dependencies": {
+        "@hono/node-server": "^1.19.17",
+        "@hono/node-ws": "^1.3.1",
+        "fast-xml-parser": "^5.11.2",
+        "hono": "^4.13.13"
+    },
+    "devDependencies": {
+        "@commitlint/cli": "^21.2.4",
+        "@commitlint/config-conventional": "^21.2.4",
+        "@eslint/js": "^10.0.1",
+        "@types/node": "^24.19.2",
+        "eslint": "^10.13.0",
+        "husky": "^9.1.7",
+        "lint-staged": "^17.6.0",
+        "prettier": "^3.9.10",
+        "tsx": "^4.23.15",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.72.0",
+        "vitest": "^5.0.5"
+    },
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "esbuild"
+        ]
+    }
+}
