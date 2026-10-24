@@ -101,42 +101,51 @@ export function createWebSubSubscriber(deps: {
             MIN_RENEW_SECONDS,
             leaseSeconds - renewSeconds
         );
-        return schedule(async () => {
-            feed.transition({
-                kind: 'active',
-                via: 'websub',
-                target,
-                renewal: 'requested'
-            });
-            const result = await requestSubscription(target);
-            const found = subscription(target.id);
-            if (!found) return;
-            if (!result.ok) {
-                fail(feed, target, `WebSub renewal failed: ${result.reason}`);
-                return;
-            }
-            if (
-                found.state.kind !== 'active' ||
-                found.state.renewal !== 'requested'
-            ) {
-                return;
-            }
-            feed.transition({
-                kind: 'active',
-                via: 'websub',
-                target,
-                renewal: 'awaiting-verification',
-                timer: schedule(
-                    () =>
-                        fail(
-                            feed,
-                            target,
-                            'WebSub hub did not verify the renewal before the lease ended'
-                        ),
-                    graceSeconds * 1000
-                )
-            });
-        }, renewSeconds * 1000);
+        return schedule(
+            () => void renew(feed, target, graceSeconds),
+            renewSeconds * 1000
+        );
+    }
+
+    async function renew(
+        feed: FeedHandle,
+        target: WebSubTarget,
+        graceSeconds: number
+    ) {
+        feed.transition({
+            kind: 'active',
+            via: 'websub',
+            target,
+            renewal: 'requested'
+        });
+        const result = await requestSubscription(target);
+        const found = subscription(target.id);
+        if (!found) return;
+        if (!result.ok) {
+            fail(feed, target, `WebSub renewal failed: ${result.reason}`);
+            return;
+        }
+        if (
+            found.state.kind !== 'active' ||
+            found.state.renewal !== 'requested'
+        ) {
+            return;
+        }
+        feed.transition({
+            kind: 'active',
+            via: 'websub',
+            target,
+            renewal: 'awaiting-verification',
+            timer: schedule(
+                () =>
+                    fail(
+                        feed,
+                        target,
+                        'WebSub hub did not verify the renewal before the lease ended'
+                    ),
+                graceSeconds * 1000
+            )
+        });
     }
 
     const callbacks: WebSubCallbacks = {
