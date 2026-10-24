@@ -338,6 +338,23 @@ describe('WebSub renewal', () => {
         expect(hub.subscribes()).toHaveLength(2);
     });
 
+    it('never renews when the hub verifies and then fails the subscribe request', async () => {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        s.net.on(HUB, async request => {
+            await hub.verify(request, { 'hub.lease_seconds': '1000' });
+            return new Response(null, { status: 500 });
+        });
+        const client = recordingClient();
+        s.registry.add(client, [FEED]);
+        await settle();
+        expect(client.messages.at(-1)).toMatchObject({ state: 'error' });
+
+        await vi.advanceTimersByTimeAsync(10_000_000);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(1);
+    });
+
     it('stops renewing after the last client leaves', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);

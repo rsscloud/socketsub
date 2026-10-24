@@ -128,7 +128,7 @@ export function createRegistry(deps: RegistryDeps) {
 
     function drop(feed: FeedSub) {
         const { state } = feed;
-        if (state.kind === 'active') clearTimeout(state.renewTimer);
+        cancelRenewal(state);
         if (
             (state.kind === 'subscribing' || state.kind === 'active') &&
             state.via === 'websub'
@@ -149,7 +149,10 @@ export function createRegistry(deps: RegistryDeps) {
     }
 
     function setState(feed: FeedSub, state: FeedState) {
+        const previous = feed.state;
+        cancelRenewal(previous);
         feed.state = state;
+        if (sameStatus(previous, state)) return;
         for (const [client, url] of feed.clients) {
             client.send(statusMessage(url, state));
         }
@@ -319,12 +322,12 @@ export function createRegistry(deps: RegistryDeps) {
             const result = await registerRssCloud(target);
             if (!isLive(feed)) return;
             if (result.success) {
-                feed.state = {
+                setState(feed, {
                     kind: 'active',
                     via: 'rsscloud',
                     target,
                     renewTimer: scheduleRssCloudRenewal(feed, target)
-                };
+                });
                 return;
             }
             setState(feed, {
@@ -410,8 +413,7 @@ export function createRegistry(deps: RegistryDeps) {
                 return false;
             }
             const { feed, state } = found;
-            if (state.kind === 'active') clearTimeout(state.renewTimer);
-            const next: FeedState = {
+            setState(feed, {
                 kind: 'active',
                 via: 'websub',
                 target: state.target,
@@ -420,9 +422,7 @@ export function createRegistry(deps: RegistryDeps) {
                     state.target,
                     intent.leaseSeconds ?? deps.config.websubLeaseSeconds
                 )
-            };
-            if (state.kind === 'active') feed.state = next;
-            else setState(feed, next);
+            });
             return true;
         },
 
@@ -430,9 +430,6 @@ export function createRegistry(deps: RegistryDeps) {
             websubUnsubscribing.delete(id);
             const found = webSubFeed(id);
             if (!found) return;
-            if (found.state.kind === 'active') {
-                clearTimeout(found.state.renewTimer);
-            }
             websubFeeds.delete(id);
             setState(found.feed, {
                 kind: 'failed',
@@ -498,6 +495,17 @@ function statusMessage(url: string, state: FeedState): StatusMessage {
                 detail: state.reason
             };
     }
+}
+
+function cancelRenewal(state: FeedState) {
+    if (state.kind === 'active') clearTimeout(state.renewTimer);
+}
+
+function sameStatus(a: FeedState, b: FeedState): boolean {
+    return (
+        JSON.stringify(statusMessage('', a)) ===
+        JSON.stringify(statusMessage('', b))
+    );
 }
 
 function schedule(task: () => void, delayMs: number): Timer {
