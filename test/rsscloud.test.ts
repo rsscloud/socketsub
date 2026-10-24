@@ -392,6 +392,32 @@ describe('rssCloud renewal retries', () => {
         });
     });
 
+    it('retries a 503 that lands after a newer success ended the cooldown', async () => {
+        const other = 'https://other.example/feed.xml';
+        const { s, clients } = await registered([FEED, other]);
+        const held = gate();
+        const renewals: string[] = [];
+        s.net.on(CLOUD, async request => {
+            renewals.push(request.form.get('url1') ?? '');
+            if (renewals.length === 1) {
+                await held.wait();
+                return new Response(null, { status: 503 });
+            }
+            if (renewals.length <= 3)
+                return new Response(null, { status: 503 });
+            return Response.json({ success: true, msg: 'ok' });
+        });
+        await advance(24 * HOUR + 4 * MINUTE);
+        expect(renewals).toEqual([FEED, other, other, other]);
+
+        held.release();
+        await settle();
+        expect(clients[0]!.messages.at(-1)).toEqual(subscribed);
+        await advance(2 * MINUTE);
+        expect(renewals).toEqual([FEED, other, other, other, FEED]);
+        expect(clients[0]!.messages.at(-1)).toEqual(subscribed);
+    });
+
     it('fails on a refused renewal without cooling the cloud for other feeds', async () => {
         const { s, clients } = await registered();
         fakeCloud(s, CLOUD, { refuse: 'Feed is not reachable.' });

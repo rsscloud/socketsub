@@ -14,25 +14,15 @@ export type Exchange =
     | { kind: 'unreachable' }
     | { kind: 'not-sent' };
 
-export type Attempt = { finish(exchange: Exchange): void };
-
-export type RetryPlan =
-    { kind: 'retry'; at: number } | { kind: 'refused' } | { kind: 'too-late' };
+export type Admission =
+    | { admitted: true; finish(exchange: Exchange): void }
+    | { admitted: false; until: number };
 
 export type Backoff = {
-    begin(origin: string): Attempt;
+    begin(origin: string): Admission;
     cooldownEnd(origin: string): number | undefined;
-    retryBefore(origin: string, deadline: number): RetryPlan;
+    retryAt(origin: string, deadline: number): number | undefined;
 };
-
-export class CoolingDownError extends Error {
-    constructor(origin: string, until: number) {
-        super(
-            `${origin} failed recently; not contacting it before ${new Date(until).toISOString()}`
-        );
-        this.name = 'CoolingDownError';
-    }
-}
 
 // `mark` is the last request ticket issued when the streak last failed:
 // an outcome from a ticket at or below it started before that failure, so
@@ -141,27 +131,29 @@ export function createBackoff(clock: Clock): Backoff {
     return {
         cooldownEnd,
 
-        // Read right after a request failed: only a transient failure leaves
-        // its origin cooling down, so no cooldown means a refusal.
-        retryBefore(origin, deadline) {
-            const end = cooldownEnd(origin);
-            if (end === undefined) return { kind: 'refused' };
+        // When to retry after a transient failure: never sooner than the
+        // shortest cooldown, even if the origin is not cooling down.
+        retryAt(origin, deadline) {
+            const end = cooldownEnd(origin) ?? clock.now() + BASE_COOLDOWN_MS;
             const at = end + clock.random() * RETRY_SPREAD_MS;
-            return at < deadline ? { kind: 'retry', at } : { kind: 'too-late' };
+            return at < deadline ? at : undefined;
         },
 
         begin(origin) {
             const end = cooldownEnd(origin);
-            if (end !== undefined) throw new CoolingDownError(origin, end);
+            if (end !== undefined) return { admitted: false, until: end };
             const ticket = ++tickets;
             const streak = streaks.get(origin);
             if (streak?.kind === 'cooling') streak.probe = ticket;
-            return { finish: exchange => finish(origin, ticket, exchange) };
+            return {
+                admitted: true,
+                finish: exchange => finish(origin, ticket, exchange)
+            };
         }
     };
 }
 
-function isServerTrouble(status: number): boolean {
+export function isServerTrouble(status: number): boolean {
     return status >= 500 || status === 429;
 }
 

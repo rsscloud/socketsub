@@ -1,6 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
-import type { Backoff, Exchange } from './backoff.js';
+import { isServerTrouble, type Backoff, type Exchange } from './backoff.js';
 import { createKeyedLimiter } from './limiter.js';
 import { isHttpUrl } from './url.js';
 
@@ -21,7 +21,35 @@ export type Fetcher = (
     request?: FetchRequest
 ) => Promise<FetchResult>;
 
-export type RequestResult = { ok: true } | { ok: false; reason: string };
+// `refused`: retrying will not help. `transient`: the server failed or could
+// not be reached. `deferred`: not sent because the origin is cooling down.
+export type RequestFailure = 'refused' | 'transient' | 'deferred';
+
+export type RequestResult =
+    { ok: true } | { ok: false; reason: string; failure: RequestFailure };
+
+export class FetchError extends Error {
+    constructor(
+        message: string,
+        readonly origin: string,
+        readonly failure: RequestFailure,
+        options?: ErrorOptions
+    ) {
+        super(message, options);
+        this.name = 'FetchError';
+    }
+}
+
+export class CoolingDownError extends FetchError {
+    constructor(origin: string, until: number) {
+        super(
+            `${origin} failed recently; not contacting it before ${new Date(until).toISOString()}`,
+            origin,
+            'deferred'
+        );
+        this.name = 'CoolingDownError';
+    }
+}
 
 export type Lookup = (hostname: string) => Promise<string[]>;
 
@@ -79,8 +107,6 @@ export function isPrivateAddress(address: string): boolean {
     return true;
 }
 
-class RefusedHostError extends Error {}
-
 type Hop =
     { kind: 'redirect'; to: URL } | { kind: 'done'; result: FetchResult };
 
@@ -92,8 +118,10 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
         const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
         const addresses = isIP(host) ? [host] : await deps.lookup(host);
         if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
-            throw new RefusedHostError(
-                `refusing private or unresolvable host ${host}`
+            throw new FetchError(
+                `refusing private or unresolvable host ${host}`,
+                url.origin,
+                'refused'
             );
         }
     }
@@ -103,10 +131,17 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
     // body included, into the origin's backoff.
     async function send(url: URL, request: FetchRequest): Promise<Hop> {
         if (!isHttpUrl(url)) {
-            throw new Error(`refusing ${url.protocol} URL`);
+            throw new FetchError(
+                `refusing ${url.protocol} URL`,
+                url.origin,
+                'refused'
+            );
         }
         return limit(url.origin, async () => {
             const attempt = deps.backoff.begin(url.origin);
+            if (!attempt.admitted) {
+                throw new CoolingDownError(url.origin, attempt.until);
+            }
             let exchange: Exchange = { kind: 'not-sent' };
             try {
                 await assertPublic(url);
@@ -122,12 +157,22 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
                 };
                 const location = res.headers.get('location');
                 if (!request.form && isRedirect(res.status) && location) {
-                    await res.body?.cancel();
                     exchange = answered;
+                    await res.body?.cancel();
                     return { kind: 'redirect', to: new URL(location, url) };
                 }
-                const body = await readCapped(res, () => (exchange = answered));
                 exchange = answered;
+                let body: string;
+                try {
+                    body = await readCapped(res, url);
+                } catch (err) {
+                    // An oversized body is still an answer; a stalled or
+                    // broken one is not.
+                    if (!(err instanceof FetchError)) {
+                        exchange = { kind: 'unreachable' };
+                    }
+                    throw err;
+                }
                 return {
                     kind: 'done',
                     result: {
@@ -137,6 +182,12 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
                         body
                     }
                 };
+            } catch (err) {
+                throw err instanceof FetchError
+                    ? err
+                    : new FetchError(errorText(err), url.origin, 'transient', {
+                          cause: err
+                      });
             } finally {
                 attempt.finish(exchange);
             }
@@ -148,7 +199,13 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
         for (let hop = 0; ; hop++) {
             const step = await send(current, request);
             if (step.kind === 'done') return step.result;
-            if (hop >= MAX_REDIRECTS) throw new Error('too many redirects');
+            if (hop >= MAX_REDIRECTS) {
+                throw new FetchError(
+                    'too many redirects',
+                    current.origin,
+                    'refused'
+                );
+            }
             current = step.to;
         }
     };
@@ -171,24 +228,18 @@ function init(request: FetchRequest, timeoutMs: number): RequestInit {
         : { method: 'GET', headers, signal, redirect: 'manual' };
 }
 
-async function readCapped(
-    res: Response,
-    onTooLarge: () => void
-): Promise<string> {
+async function readCapped(res: Response, url: URL): Promise<string> {
+    const tooLarge = new FetchError(BODY_TOO_LARGE, url.origin, 'refused');
     if (Number(res.headers.get('content-length')) > MAX_BODY_BYTES) {
-        onTooLarge();
         await res.body?.cancel();
-        throw new Error(BODY_TOO_LARGE);
+        throw tooLarge;
     }
     if (!res.body) return '';
     const chunks: Uint8Array[] = [];
     let total = 0;
     for await (const chunk of res.body) {
         total += chunk.byteLength;
-        if (total > MAX_BODY_BYTES) {
-            onTooLarge();
-            throw new Error(BODY_TOO_LARGE);
-        }
+        if (total > MAX_BODY_BYTES) throw tooLarge;
         chunks.push(chunk);
     }
     return Buffer.concat(chunks).toString('utf8');
@@ -199,6 +250,18 @@ export function errorText(err: unknown): string {
         return err.name === 'TimeoutError' ? 'request timed out' : err.message;
     }
     return String(err);
+}
+
+export function failedRequest(err: unknown): RequestResult {
+    return {
+        ok: false,
+        reason: errorText(err),
+        failure: err instanceof FetchError ? err.failure : 'refused'
+    };
+}
+
+export function statusFailure(status: number): RequestFailure {
+    return isServerTrouble(status) ? 'transient' : 'refused';
 }
 
 export function isSuccessStatus(status: number): boolean {

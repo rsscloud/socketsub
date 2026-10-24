@@ -1,6 +1,7 @@
 import {
-    errorText,
+    failedRequest,
     isSuccessStatus,
+    statusFailure,
     type Fetcher,
     type RequestResult
 } from '../net.js';
@@ -55,9 +56,10 @@ async function postToHub(
         const body = res.body.trim().slice(0, 200);
         return {
             ok: false,
-            reason: `hub returned HTTP ${res.status}${body ? `: ${body}` : ''}`
+            reason: `hub returned HTTP ${res.status}${body ? `: ${body}` : ''}`,
+            failure: statusFailure(res.status)
         };
     } catch (err) {
-        return { ok: false, reason: errorText(err) };
+        return failedRequest(err);
     }
 }

@@ -75,22 +75,22 @@ export function createRssCloudSubscriber(deps: RegistryDeps) {
             activate(feed, target);
             return;
         }
-        const plan = deps.backoff.retryBefore(
-            target.endpoint.origin,
-            expiresAt
-        );
-        if (plan.kind === 'retry') {
-            scheduleRenewal(feed, target, expiresAt, plan.at - deps.now());
-            return;
+        const { origin } = target.endpoint;
+        if (result.failure !== 'refused') {
+            const at = deps.backoff.retryAt(origin, expiresAt);
+            if (at !== undefined) {
+                scheduleRenewal(feed, target, expiresAt, at - deps.now());
+                return;
+            }
         }
         const late =
-            plan.kind === 'too-late'
+            result.failure !== 'refused'
                 ? '; the registration expires before the cloud can be retried'
                 : '';
         feed.fail(
             `rssCloud renewal failed: ${result.reason}${late}`,
             'rsscloud',
-            target.endpoint
+            origin
         );
     }
 

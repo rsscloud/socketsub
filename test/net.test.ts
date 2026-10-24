@@ -145,7 +145,8 @@ describe('guarded fetcher', () => {
             backoff: createBackoff({ now: Date.now, random: Math.random })
         });
         await expect(get('https://slow.example/')).rejects.toMatchObject({
-            name: 'TimeoutError'
+            message: 'request timed out',
+            failure: 'transient'
         });
     });
 

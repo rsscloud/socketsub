@@ -341,6 +341,37 @@ describe('retrying a dead feed on a new subscribe', () => {
         expect(net.to(FEED)).toHaveLength(2);
     });
 
+    it('times the retry of a redirected feed by the host that failed', async () => {
+        const { net, registry } = setup();
+        const moved = 'https://new.example/feed.xml';
+        net.on(
+            FEED,
+            () =>
+                new Response(null, {
+                    status: 301,
+                    headers: { location: moved }
+                })
+        );
+        net.on(
+            moved,
+            () =>
+                new Response(null, {
+                    status: 503,
+                    headers: { 'retry-after': '600' }
+                })
+        );
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        await vi.advanceTimersByTimeAsync(599_999);
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(2);
+    });
+
     it('reports a feed on a cooling host as an error without fetching it', async () => {
         const { net, registry } = setup();
         const sibling = 'https://blog.example/other.xml';

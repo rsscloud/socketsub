@@ -81,7 +81,7 @@ export function createWebSubSubscriber(deps: RegistryDeps) {
 
     function fail(feed: FeedHandle, target: WebSubTarget, reason: string) {
         feedById.delete(target.id);
-        feed.fail(reason, 'websub', target.hub);
+        feed.fail(reason, 'websub', target.hub.origin);
     }
 
     function verified(
@@ -131,13 +131,15 @@ export function createWebSubSubscriber(deps: RegistryDeps) {
         const found = subscription(target.id);
         if (!found) return;
         if (!result.ok) {
-            const plan = deps.backoff.retryBefore(target.hub.origin, expiresAt);
-            if (plan.kind === 'retry') {
-                scheduleRenewal(feed, target, expiresAt, plan.at - deps.now());
-                return;
+            if (result.failure !== 'refused') {
+                const at = deps.backoff.retryAt(target.hub.origin, expiresAt);
+                if (at !== undefined) {
+                    scheduleRenewal(feed, target, expiresAt, at - deps.now());
+                    return;
+                }
             }
             const late =
-                plan.kind === 'too-late'
+                result.failure !== 'refused'
                     ? '; the lease ends before the hub can be retried'
                     : '';
             fail(

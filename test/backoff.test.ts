@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CoolingDownError, createBackoff } from '../src/backoff.js';
-import { createFetcher } from '../src/net.js';
+import { createBackoff } from '../src/backoff.js';
+import { CoolingDownError, createFetcher } from '../src/net.js';
 import { createFakeNet, gate } from './support/fake-net.js';
 
 const ORIGIN = 'https://cloud.example';
@@ -93,7 +93,8 @@ describe('origin backoff', () => {
             backoff
         });
         await expect(get(URL_A)).rejects.toMatchObject({
-            name: 'TimeoutError'
+            message: 'request timed out',
+            failure: 'transient'
         });
         expect(backoff.cooldownEnd(ORIGIN)).toBeGreaterThan(Date.now());
     });

@@ -3,7 +3,7 @@ import type { Config } from './config.js';
 import { discover, type Discovery } from './discover.js';
 import { createLimiter } from './limiter.js';
 import type { Client, PushProtocol, StatusMessage } from './messages.js';
-import { errorText, type Fetcher } from './net.js';
+import { errorText, FetchError, type Fetcher } from './net.js';
 import type { RssCloudCallbacks } from './rsscloud/routes.js';
 import {
     createRssCloudSubscriber,
@@ -34,7 +34,7 @@ export type FeedState =
 export type FeedHandle = {
     readonly state: FeedState;
     transition(state: FeedState): void;
-    fail(reason: string, via: PushProtocol, upstream: URL): void;
+    fail(reason: string, via: PushProtocol, origin: string): void;
     isLive(): boolean;
     addAlias(url: string): void;
     sendUpdate(): void;
@@ -103,8 +103,8 @@ export function createRegistry(deps: RegistryDeps) {
                 return feed.state;
             },
             transition: state => transition(feed, state),
-            fail: (reason, via, upstream) =>
-                transition(feed, failure(reason, via, upstream)),
+            fail: (reason, via, origin) =>
+                transition(feed, failure(reason, via, origin)),
             isLive: () => isLive(feed),
             addAlias: url => addAlias(feed, url),
             sendUpdate: () => sendUpdate(feed)
@@ -143,11 +143,11 @@ export function createRegistry(deps: RegistryDeps) {
     function failure(
         reason: string,
         via: PushProtocol | undefined,
-        upstream: URL
+        origin: string
     ): FeedState {
         const retryAt = Math.max(
             deps.now() + MIN_RETRY_MS,
-            deps.backoff.cooldownEnd(upstream.origin) ?? 0
+            deps.backoff.cooldownEnd(origin) ?? 0
         );
         return { kind: 'failed', reason, retryAt, ...(via && { via }) };
     }
@@ -238,7 +238,7 @@ export function createRegistry(deps: RegistryDeps) {
             handle.fail(
                 rssCloudFailure,
                 'rsscloud',
-                discovery.rssCloud.endpoint
+                discovery.rssCloud.endpoint.origin
             );
             return;
         }
@@ -259,10 +259,12 @@ export function createRegistry(deps: RegistryDeps) {
             );
         } catch (err) {
             if (isLive(feed)) {
-                transition(
-                    feed,
-                    failure(errorText(err), undefined, new URL(feed.key))
-                );
+                // The failing hop may be a redirect target on another host.
+                const origin =
+                    err instanceof FetchError
+                        ? err.origin
+                        : new URL(feed.key).origin;
+                transition(feed, failure(errorText(err), undefined, origin));
             }
             return undefined;
         }
