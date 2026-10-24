@@ -134,6 +134,16 @@ describe('rssCloud callback routes', () => {
         expect(bystander.messages.some(m => m.type === 'update')).toBe(false);
     });
 
+    it('refuses a notify POST body over 1 MiB', async () => {
+        const s = setup();
+        const res = await s.app.request('/rsscloud/notify', {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: `url=${'a'.repeat(1024 * 1024)}`
+        });
+        expect(res.status).toBe(413);
+    });
+
     it('accepts a notify POST for an unknown URL', async () => {
         const s = setup();
         const res = await s.app.request('/rsscloud/notify', {

@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { RssCloudCallback } from './config.js';
 import type { Fetcher } from './net.js';
 import type { Registry } from './registry.js';
@@ -66,6 +67,7 @@ function parseNotifyResult(status: number, body: string): NotifyResult {
 
 export function rsscloudRoutes(registry: Registry) {
     const routes = new Hono();
+    routes.use(bodyLimit({ maxSize: 1024 * 1024 }));
 
     routes.get('/notify', c => {
         const url = c.req.query('url');

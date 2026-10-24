@@ -214,6 +214,15 @@ describe('WebSub delivery', () => {
         expect(client.messages).toHaveLength(before);
     });
 
+    it('refuses a delivery body over 10 MiB', async () => {
+        const { hub, client, request } = await subscribed();
+        const before = client.messages.length;
+        const body = 'x'.repeat(10 * 1024 * 1024 + 1);
+        const res = await hub.deliver(request, body, sign('sha256'));
+        expect(res.status).toBe(413);
+        expect(client.messages).toHaveLength(before);
+    });
+
     it('answers 410 for an unknown subscription id', async () => {
         const s = setup();
         const res = await s.app.request('/websub/unknown', {

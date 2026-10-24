@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { Fetcher } from './net.js';
 import type { Registry } from './registry.js';
 
@@ -61,6 +62,7 @@ export function signatureValid(
 
 export function websubRoutes(registry: Registry) {
     const routes = new Hono();
+    routes.use(bodyLimit({ maxSize: 10 * 1024 * 1024 }));
 
     routes.get('/:id', c => {
         const id = c.req.param('id');
