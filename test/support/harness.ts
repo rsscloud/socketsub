@@ -4,7 +4,7 @@ import { setImmediate } from 'node:timers/promises';
 import { serve } from '@hono/node-server';
 import { createApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
-import type { Client, ServerMessage } from '../../src/registry.js';
+import type { Client, ServerMessage } from '../../src/messages.js';
 import { createFakeNet, netActivity } from './fake-net.js';
 
 export function testConfig(env: Record<string, string> = {}) {

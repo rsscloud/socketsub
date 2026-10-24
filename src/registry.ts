@@ -6,27 +6,12 @@ import {
     type Config
 } from './config.js';
 import { discover, type Discovery } from './discover.js';
+import { createLimiter } from './limiter.js';
+import type { Client, PushProtocol, StatusMessage } from './messages.js';
 import { errorText, type Fetcher } from './net.js';
 import { pleaseNotify } from './rsscloud.js';
 import { normalizeUrl, sameUrl } from './url.js';
 import { subscribeAtHub, unsubscribeAtHub } from './websub.js';
-
-export type PushProtocol = 'rsscloud' | 'websub';
-
-export type ServerMessage =
-    | {
-          type: 'status';
-          url: string;
-          state: 'pending' | 'subscribed' | 'unsupported' | 'error';
-          via?: PushProtocol;
-          detail?: string;
-      }
-    | { type: 'update'; url: string }
-    | { type: 'error'; message: string };
-
-type StatusMessage = Extract<ServerMessage, { type: 'status' }>;
-
-export type Client = { send(message: ServerMessage): void };
 
 export type FeedKey = string & { __brand: 'FeedKey' };
 
@@ -546,20 +531,4 @@ function sameStatus(a: FeedState, b: FeedState): boolean {
 
 function schedule(task: () => void, delayMs: number): Timer {
     return setTimeout(task, Math.min(delayMs, MAX_TIMER_MS));
-}
-
-function createLimiter(max: number) {
-    let active = 0;
-    const waiting: (() => void)[] = [];
-    return async <T>(task: () => Promise<T>): Promise<T> => {
-        if (active >= max) await new Promise<void>(r => waiting.push(r));
-        else active++;
-        try {
-            return await task();
-        } finally {
-            const next = waiting.shift();
-            if (next) next();
-            else active--;
-        }
-    };
 }
