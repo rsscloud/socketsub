@@ -188,6 +188,10 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
                     }
                 };
             } catch (err) {
+                // A name that does not resolve never reached a server.
+                if (exchange.kind === 'unreachable' && isDnsFailure(err)) {
+                    exchange = { kind: 'not-sent' };
+                }
                 throw err instanceof FetchError
                     ? err
                     : new FetchError(errorText(err), url.origin, 'transient', {
@@ -248,6 +252,26 @@ async function readCapped(res: Response, url: URL): Promise<string> {
         chunks.push(chunk);
     }
     return Buffer.concat(chunks).toString('utf8');
+}
+
+const DNS_ERROR_CODES = new Set([
+    'ENOTFOUND',
+    'ENODATA',
+    'ESERVFAIL',
+    'EAI_AGAIN',
+    'EAI_FAIL',
+    'EAI_NODATA',
+    'EAI_NONAME'
+]);
+
+function isDnsFailure(err: unknown): boolean {
+    for (let e = err; e instanceof Error; e = e.cause) {
+        const { code, syscall } = e as NodeJS.ErrnoException;
+        if (syscall === 'getaddrinfo' || DNS_ERROR_CODES.has(code ?? '')) {
+            return true;
+        }
+    }
+    return false;
 }
 
 export function errorText(err: unknown): string {

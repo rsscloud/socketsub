@@ -3,6 +3,7 @@ const COOLDOWN_FACTOR = 2;
 const MAX_COOLDOWN_MS = 3600_000;
 const JITTER = 0.2;
 const MAX_RETRY_AFTER_MS = 6 * 3600_000;
+const MAX_TRACKED_ORIGINS = 10_000;
 // Requests waiting on one origin retry at random points across this window
 // after its cooldown, instead of all at the instant it ends.
 const RETRY_SPREAD_MS = 60_000;
@@ -66,6 +67,16 @@ export function createBackoff(clock: Clock): Backoff {
         );
     }
 
+    // Map order is update order, so the first entry is the one updated
+    // longest ago; stale entries are otherwise dropped only when read.
+    function track(origin: string, streak: Streak) {
+        streaks.delete(origin);
+        streaks.set(origin, streak);
+        if (streaks.size > MAX_TRACKED_ORIGINS) {
+            streaks.delete(streaks.keys().next().value!);
+        }
+    }
+
     function current(origin: string, now: number): Streak | undefined {
         const streak = streaks.get(origin);
         if (streak && isStale(streak, now)) {
@@ -90,7 +101,7 @@ export function createBackoff(clock: Clock): Backoff {
             streaks.delete(origin);
             return;
         }
-        streaks.set(origin, {
+        track(origin, {
             kind: 'recovered',
             failures,
             mark: streak.mark,
@@ -110,15 +121,12 @@ export function createBackoff(clock: Clock): Backoff {
             MAX_RETRY_AFTER_MS,
             Math.max(computed, retryAfter)
         );
-        streaks.set(origin, {
+        track(origin, {
             kind: 'cooling',
             failures,
             until: now + delay,
             mark: tickets
         });
-        for (const [key, streak] of streaks) {
-            if (isStale(streak, now)) streaks.delete(key);
-        }
     }
 
     function finish(origin: string, ticket: number, exchange: Exchange) {

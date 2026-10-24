@@ -99,6 +99,76 @@ describe('origin backoff', () => {
         expect(backoff.cooldownEnd(ORIGIN)).toBeGreaterThan(Date.now());
     });
 
+    it.each([
+        [
+            'in the private-host check',
+            {
+                lookup: () =>
+                    Promise.reject(
+                        Object.assign(new Error('getaddrinfo ENOTFOUND'), {
+                            code: 'ENOTFOUND',
+                            syscall: 'getaddrinfo'
+                        })
+                    ),
+                allowPrivateHosts: false
+            }
+        ],
+        [
+            'inside fetch',
+            {
+                lookup: async () => ['93.184.215.14'],
+                allowPrivateHosts: true
+            }
+        ]
+    ])(
+        'does not cool an origin whose name fails to resolve %s',
+        async (_label, opts) => {
+            const backoff = createBackoff({ now: Date.now, random: () => 0.5 });
+            let sent = 0;
+            const get = createFetcher({
+                fetch: async () => {
+                    sent++;
+                    throw new TypeError('fetch failed', {
+                        cause: Object.assign(
+                            new Error('getaddrinfo ENOTFOUND'),
+                            {
+                                code: 'ENOTFOUND',
+                                syscall: 'getaddrinfo'
+                            }
+                        )
+                    });
+                },
+                timeoutMs: 1000,
+                backoff,
+                ...opts
+            });
+            await expect(get(URL_A)).rejects.toMatchObject({
+                failure: 'transient'
+            });
+            await expect(get(URL_A)).rejects.toMatchObject({
+                failure: 'transient'
+            });
+            expect(backoff.cooldownEnd(ORIGIN)).toBeUndefined();
+            expect(sent).toBe(opts.allowPrivateHosts ? 2 : 0);
+        }
+    );
+
+    it('tracks at most 10,000 origins, forgetting the one updated longest ago', async () => {
+        const backoff = createBackoff({ now: Date.now, random: () => 0.5 });
+        const get = createFetcher({
+            fetch: async () => new Response(null, { status: 503 }),
+            lookup: async () => ['93.184.215.14'],
+            timeoutMs: 1000,
+            allowPrivateHosts: false,
+            backoff
+        });
+        const origin = (i: number) => `https://h${i}.example`;
+        for (let i = 0; i <= 10_000; i++) await get(origin(i));
+        expect(backoff.cooldownEnd(origin(0))).toBeUndefined();
+        expect(backoff.cooldownEnd(origin(1))).toBeDefined();
+        expect(backoff.cooldownEnd(origin(10_000))).toBeDefined();
+    });
+
     it('counts a 429 as a failure', async () => {
         const r = rig();
         r.respond(429);
