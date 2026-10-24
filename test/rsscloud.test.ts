@@ -303,6 +303,45 @@ describe('rssCloud renewal retries', () => {
         expect(clients[0]!.messages).toHaveLength(3);
     });
 
+    it.each([
+        ['unsubscribes', 'unsubscribe'],
+        ['disconnects', 'close']
+    ] as const)(
+        'cancels the scheduled retry when the last client %s during backoff',
+        async (_label, leave) => {
+            const { s, clients } = await registered();
+            const times = failingUpstream(s, CLOUD);
+            await advance(24 * HOUR);
+            expect(times).toHaveLength(1);
+
+            if (leave === 'unsubscribe') {
+                s.registry.unsubscribe(clients[0]!, [FEED]);
+            } else {
+                s.registry.removeClient(clients[0]!);
+            }
+            await advance(26 * HOUR);
+            expect(times).toHaveLength(1);
+        }
+    );
+
+    it('does not reschedule a retry whose request was in flight when the last client left', async () => {
+        const { s, clients } = await registered();
+        const times: number[] = [];
+        const held = gate();
+        s.net.on(CLOUD, async () => {
+            times.push(Date.now());
+            if (times.length === 2) await held.wait();
+            return new Response(null, { status: 503 });
+        });
+        await advance(24 * HOUR + MINUTE);
+        expect(times).toHaveLength(2);
+
+        s.registry.removeClient(clients[0]!);
+        held.release();
+        await advance(26 * HOUR);
+        expect(times).toHaveLength(2);
+    });
+
     it('fails before the registration expires when renewals keep failing', async () => {
         const { s, clients, start } = await registered();
         const times = failingUpstream(s, CLOUD);

@@ -546,6 +546,27 @@ describe('WebSub renewal retries', () => {
         expect(client.messages).toHaveLength(sent);
     });
 
+    it.each([
+        ['unsubscribes', 'unsubscribe'],
+        ['disconnects', 'close']
+    ] as const)(
+        'cancels the scheduled retry when the last client %s during backoff',
+        async (_label, leave) => {
+            const { s, client } = await verified();
+            const times = failingUpstream(s, HUB);
+            await advance(RENEW_AT);
+            expect(times).toHaveLength(1);
+
+            if (leave === 'unsubscribe') {
+                s.registry.unsubscribe(client, [FEED]);
+            } else {
+                s.registry.removeClient(client);
+            }
+            await advance(Number(LEASE) * 1000);
+            expect(times).toHaveLength(1);
+        }
+    );
+
     it('fails before the lease ends when renewals keep failing', async () => {
         const { s, client, request, start } = await verified();
         const times = failingUpstream(s, HUB);
