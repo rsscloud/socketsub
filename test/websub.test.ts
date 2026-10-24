@@ -406,6 +406,21 @@ describe('WebSub renewal', () => {
         expect(hub.subscribes()).toHaveLength(1);
     });
 
+    it('forgets an unverified unsubscribe after 10 minutes', async () => {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        const client = recordingClient();
+        s.registry.add(client, [FEED]);
+        await settle();
+        await hub.verify(hub.subscribes()[0]);
+        s.registry.removeClient(client);
+        await settle();
+        const unsubscribe = hub.unsubscribes()[0];
+
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect((await hub.verify(unsubscribe)).status).toBe(404);
+    });
+
     it('stops renewing after the last client leaves', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);

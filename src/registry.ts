@@ -31,6 +31,8 @@ export type FeedKey = string & { __brand: 'FeedKey' };
 
 type Timer = ReturnType<typeof setTimeout>;
 
+const UNSUBSCRIBE_VERIFY_WINDOW_MS = 10 * 60_000;
+
 type RssCloudTarget = { endpoint: URL; topic: string };
 
 type WebSubTarget = { hub: URL; topic: string; id: string; secret: string };
@@ -136,6 +138,10 @@ export function createRegistry(deps: RegistryDeps) {
             const { target } = state;
             websubFeeds.delete(target.id);
             websubUnsubscribing.set(target.id, target);
+            setTimeout(
+                () => websubUnsubscribing.delete(target.id),
+                UNSUBSCRIBE_VERIFY_WINDOW_MS
+            ).unref();
             void requestHub(target, 'unsubscribe').then(result => {
                 if (!result.ok) websubUnsubscribing.delete(target.id);
             });
