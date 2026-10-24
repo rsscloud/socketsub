@@ -18,15 +18,28 @@ export type Config = {
 
 type Env = Record<string, string | undefined>;
 
+// Node fires any longer setTimeout after 1 ms.
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
 export function loadConfig(env: Env): Config {
     return {
-        port: positiveInt(env, 'PORT', 3000),
+        port: positiveInt(env, 'PORT', 3000, 65535),
         publicUrl: publicUrl(env.PUBLIC_URL),
         rsscloudRenewMs:
-            positiveInt(env, 'RSSCLOUD_RENEW_HOURS', 24) * 3600_000,
+            positiveInt(
+                env,
+                'RSSCLOUD_RENEW_HOURS',
+                24,
+                Math.floor(MAX_TIMER_MS / 3600_000)
+            ) * 3600_000,
         websubLeaseSeconds: positiveInt(env, 'WEBSUB_LEASE_SECONDS', 86400),
         maxFeedsPerMessage: positiveInt(env, 'MAX_FEEDS_PER_MESSAGE', 500),
-        fetchTimeoutMs: positiveInt(env, 'FETCH_TIMEOUT_MS', 10000),
+        fetchTimeoutMs: positiveInt(
+            env,
+            'FETCH_TIMEOUT_MS',
+            10000,
+            MAX_TIMER_MS
+        ),
         discoveryConcurrency: positiveInt(env, 'DISCOVERY_CONCURRENCY', 8),
         allowPrivateHosts: bool(env, 'ALLOW_PRIVATE_HOSTS', false)
     };
@@ -65,12 +78,20 @@ function publicUrl(raw: string | undefined): URL {
     return url;
 }
 
-function positiveInt(env: Env, name: string, fallback: number): number {
+function positiveInt(
+    env: Env,
+    name: string,
+    fallback: number,
+    max = Number.MAX_SAFE_INTEGER
+): number {
     const raw = env[name];
     if (raw === undefined || raw === '') return fallback;
     const value = Number(raw);
     if (!Number.isInteger(value) || value <= 0) {
         throw new Error(`${name} must be a positive integer, got: ${raw}`);
+    }
+    if (value > max) {
+        throw new Error(`${name} must be at most ${max}, got: ${raw}`);
     }
     return value;
 }

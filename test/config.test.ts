@@ -32,6 +32,24 @@ describe('loadConfig', () => {
         ).toThrow(/ALLOW_PRIVATE_HOSTS/);
     });
 
+    it.each([
+        ['RSSCLOUD_RENEW_HOURS', '597'],
+        ['FETCH_TIMEOUT_MS', '2147483648'],
+        ['PORT', '65536']
+    ])('rejects %s=%s as out of range', (name, value) => {
+        expect(() =>
+            loadConfig({ PUBLIC_URL: 'https://x.example', [name]: value })
+        ).toThrow(new RegExp(`${name} must be at most`));
+    });
+
+    it('accepts the largest RSSCLOUD_RENEW_HOURS a timer can hold', () => {
+        const config = loadConfig({
+            PUBLIC_URL: 'https://x.example',
+            RSSCLOUD_RENEW_HOURS: '596'
+        });
+        expect(config.rsscloudRenewMs).toBe(596 * 3600_000);
+    });
+
     it('parses overrides', () => {
         const config = loadConfig({
             PUBLIC_URL: 'http://localhost:3999',

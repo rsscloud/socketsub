@@ -1,5 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { callbackUrl, rsscloudCallback, type Config } from './config.js';
+import {
+    callbackUrl,
+    MAX_TIMER_MS,
+    rsscloudCallback,
+    type Config
+} from './config.js';
 import { discover, type Discovery } from './discover.js';
 import type { Fetcher } from './net.js';
 import { pleaseNotify, type NotifyResult } from './rsscloud.js';
@@ -279,7 +284,7 @@ export function createRegistry(deps: RegistryDeps) {
         leaseSeconds: number
     ): Timer {
         const delayMs = Math.max(60, Math.floor(leaseSeconds * 0.9)) * 1000;
-        return setTimeout(async () => {
+        return schedule(async () => {
             const result = await requestHub(target, 'subscribe');
             if (result.ok || !webSubFeed(target.id)) return;
             websubFeeds.delete(target.id);
@@ -310,7 +315,7 @@ export function createRegistry(deps: RegistryDeps) {
         feed: FeedSub,
         target: RssCloudTarget
     ): Timer {
-        return setTimeout(async () => {
+        return schedule(async () => {
             const result = await registerRssCloud(target);
             if (!isLive(feed)) return;
             if (result.success) {
@@ -493,6 +498,10 @@ function statusMessage(url: string, state: FeedState): StatusMessage {
                 detail: state.reason
             };
     }
+}
+
+function schedule(task: () => void, delayMs: number): Timer {
+    return setTimeout(task, Math.min(delayMs, MAX_TIMER_MS));
 }
 
 function sameUrl(a: string, b: string): boolean {

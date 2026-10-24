@@ -321,6 +321,23 @@ describe('WebSub renewal', () => {
         expect(hub.subscribes()).toHaveLength(3);
     });
 
+    it('waits the longest timer delay when the hub grants a huge lease', async () => {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        s.registry.add(recordingClient(), [FEED]);
+        await settle();
+        await hub.verify(hub.subscribes()[0], {
+            'hub.lease_seconds': '4000000000'
+        });
+
+        await vi.advanceTimersByTimeAsync(2 ** 31 - 2);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(2);
+    });
+
     it('stops renewing after the last client leaves', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);

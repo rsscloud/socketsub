@@ -51,16 +51,16 @@ array is still processed.
 
 ## Configuration
 
-| Variable                | Default  | Meaning                                                                     |
-| ----------------------- | -------- | --------------------------------------------------------------------------- |
-| `PUBLIC_URL`            | required | Externally reachable base URL. All callback URLs are built from it.         |
-| `PORT`                  | `3000`   | Listen port.                                                                |
-| `RSSCLOUD_RENEW_HOURS`  | `24`     | rssCloud re-registration interval. Servers expire registrations after 25h.  |
-| `WEBSUB_LEASE_SECONDS`  | `86400`  | Requested WebSub lease. Renewal happens at 90% of the lease the hub grants. |
-| `MAX_FEEDS_PER_MESSAGE` | `500`    | Maximum URLs in one client message.                                         |
-| `FETCH_TIMEOUT_MS`      | `10000`  | Timeout for feed fetches and subscribe requests.                            |
-| `DISCOVERY_CONCURRENCY` | `8`      | Maximum parallel feed fetches.                                              |
-| `ALLOW_PRIVATE_HOSTS`   | `false`  | Allow fetching loopback, private, and link-local addresses.                 |
+| Variable                | Default  | Meaning                                                                                 |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `PUBLIC_URL`            | required | Externally reachable base URL. All callback URLs are built from it.                     |
+| `PORT`                  | `3000`   | Listen port.                                                                            |
+| `RSSCLOUD_RENEW_HOURS`  | `24`     | rssCloud re-registration interval, at most 596. Servers expire registrations after 25h. |
+| `WEBSUB_LEASE_SECONDS`  | `86400`  | Requested WebSub lease. Renewal happens at 90% of the lease the hub grants.             |
+| `MAX_FEEDS_PER_MESSAGE` | `500`    | Maximum URLs in one client message.                                                     |
+| `FETCH_TIMEOUT_MS`      | `10000`  | Timeout for feed fetches and subscribe requests.                                        |
+| `DISCOVERY_CONCURRENCY` | `8`      | Maximum parallel feed fetches.                                                          |
+| `ALLOW_PRIVATE_HOSTS`   | `false`  | Allow fetching loopback, private, and link-local addresses.                             |
 
 rssCloud servers call back with the `https-post` protocol when `PUBLIC_URL` is
 https, and `http-post` otherwise. The callback port is the port in
