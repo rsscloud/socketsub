@@ -52,8 +52,11 @@ for (const [network, prefix] of [
 for (const [network, prefix] of [
     ['::', 128],
     ['::1', 128],
+    ['64:ff9b::', 96],
+    ['2002::', 16],
     ['fc00::', 7],
     ['fe80::', 10],
+    ['fec0::', 10],
     ['ff00::', 8]
 ] as const) {
     blocked.addSubnet(network, prefix, 'ipv6');
