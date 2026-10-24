@@ -10,8 +10,8 @@ export type RssCloudCallback = {
 export type Config = {
     port: number;
     publicUrl: URL;
-    rsscloudRenewMs: number;
-    websubLeaseSeconds: number;
+    rssCloudRenewMs: number;
+    webSubLeaseSeconds: number;
     maxFeedsPerMessage: number;
     maxFeedsPerClient: number;
     maxFeeds: number;
@@ -29,14 +29,14 @@ export function loadConfig(env: Env): Config {
     return {
         port: positiveInt(env, 'PORT', 3000, 65535),
         publicUrl: publicUrl(env.PUBLIC_URL),
-        rsscloudRenewMs:
+        rssCloudRenewMs:
             positiveInt(
                 env,
                 'RSSCLOUD_RENEW_HOURS',
                 24,
                 Math.floor(MAX_TIMER_MS / 3600_000)
             ) * 3600_000,
-        websubLeaseSeconds: positiveInt(env, 'WEBSUB_LEASE_SECONDS', 86400),
+        webSubLeaseSeconds: positiveInt(env, 'WEBSUB_LEASE_SECONDS', 86400),
         maxFeedsPerMessage: positiveInt(env, 'MAX_FEEDS_PER_MESSAGE', 500),
         maxFeedsPerClient: positiveInt(env, 'MAX_FEEDS_PER_CLIENT', 1000),
         maxFeeds: positiveInt(env, 'MAX_FEEDS', 10000),
@@ -56,7 +56,7 @@ export function callbackUrl(config: Config, path: string): string {
     return `${base}${path}`;
 }
 
-export function rsscloudCallback(config: Config): RssCloudCallback {
+export function rssCloudCallback(config: Config): RssCloudCallback {
     const url = config.publicUrl;
     const https = url.protocol === 'https:';
     return {

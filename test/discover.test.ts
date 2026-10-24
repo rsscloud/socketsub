@@ -22,63 +22,63 @@ async function discoverFixture(name: string, headers?: Record<string, string>) {
 describe('discover', () => {
     it('builds an http endpoint from <cloud> on a non-443 port', async () => {
         const d = await discoverFixture('rss-cloud.xml');
-        expect(d.rsscloud?.endpoint.href).toBe(
+        expect(d.rssCloud?.endpoint.href).toBe(
             'http://rpc.rsscloud.example:5337/pleaseNotify'
         );
-        expect(d.websub).toBeUndefined();
+        expect(d.webSub).toBeUndefined();
     });
 
     it('uses https for <cloud> on port 443 and adds a missing slash', async () => {
         const d = await discoverFixture('rss-cloud-443.xml');
-        expect(d.rsscloud?.endpoint.href).toBe(
+        expect(d.rssCloud?.endpoint.href).toBe(
             'https://rpc.rsscloud.example/pleaseNotify'
         );
     });
 
     it('ignores an xml-rpc <cloud>', async () => {
         const d = await discoverFixture('rss-cloud-xmlrpc.xml');
-        expect(d.rsscloud).toBeUndefined();
+        expect(d.rssCloud).toBeUndefined();
     });
 
     it('reads <source:cloud> under the http namespace without a trailing slash', async () => {
         const d = await discoverFixture('source-cloud-http.xml');
-        expect(d.rsscloud?.endpoint.href).toBe(
+        expect(d.rssCloud?.endpoint.href).toBe(
             'http://rpc.rsscloud.example/pleaseNotify'
         );
     });
 
     it('resolves the source namespace by URI, not by prefix', async () => {
         const d = await discoverFixture('source-cloud-odd-prefix.xml');
-        expect(d.rsscloud?.endpoint.href).toBe(
+        expect(d.rssCloud?.endpoint.href).toBe(
             'https://rpc.rsscloud.example/pleaseNotify'
         );
     });
 
     it('prefers <source:cloud> when both cloud elements are present', async () => {
         const d = await discoverFixture('both-clouds.xml');
-        expect(d.rsscloud?.endpoint.href).toBe(
+        expect(d.rssCloud?.endpoint.href).toBe(
             'https://new.rsscloud.example/pleaseNotify'
         );
     });
 
     it('finds an Atom hub and self link', async () => {
         const d = await discoverFixture('atom-hub.xml');
-        expect(d.websub?.hub.href).toBe('https://hub.example/');
-        expect(d.websub?.topic).toBe('https://blog.example/atom.xml');
-        expect(d.rsscloud).toBeUndefined();
+        expect(d.webSub?.hub.href).toBe('https://hub.example/');
+        expect(d.webSub?.topic).toBe('https://blog.example/atom.xml');
+        expect(d.rssCloud).toBeUndefined();
     });
 
     it('finds an atom:link hub in RSS and resolves a relative self', async () => {
         const d = await discoverFixture('rss-atom-hub.xml');
-        expect(d.websub?.hub.href).toBe('https://hub.example/');
-        expect(d.websub?.topic).toBe('https://blog.example/canonical.xml');
+        expect(d.webSub?.hub.href).toBe('https://hub.example/');
+        expect(d.webSub?.topic).toBe('https://blog.example/canonical.xml');
     });
 
     it('reads hub and self from the Link header', async () => {
         const d = await discoverFixture('none.xml', {
             link: '<https://hub.example/h>; rel="hub", <https://blog.example/self.xml>; rel=self'
         });
-        expect(d.websub).toEqual({
+        expect(d.webSub).toEqual({
             hub: new URL('https://hub.example/h'),
             topic: 'https://blog.example/self.xml'
         });
@@ -88,13 +88,13 @@ describe('discover', () => {
         const d = await discoverFixture('none.xml', {
             link: '<https://hub.example/>; rel="hub"'
         });
-        expect(d.websub?.topic).toBe(FEED);
+        expect(d.webSub?.topic).toBe(FEED);
     });
 
     it('finds both protocols in one feed', async () => {
         const d = await discoverFixture('rss-cloud-and-hub.xml');
-        expect(d.rsscloud).toBeDefined();
-        expect(d.websub?.hub.href).toBe('https://hub.example/');
+        expect(d.rssCloud).toBeDefined();
+        expect(d.webSub?.hub.href).toBe('https://hub.example/');
     });
 
     it('reports nothing for a plain feed', async () => {
@@ -122,7 +122,7 @@ describe('discover', () => {
         net.feed(FEED, fixture('rss-cloud.xml'));
         const d = await discover(fetcherFor(net), 'http://old.example/rss');
         expect(d.finalUrl).toBe(FEED);
-        expect(d.rsscloud).toBeDefined();
+        expect(d.rssCloud).toBeDefined();
     });
 
     it('throws when the feed is not 2xx', async () => {

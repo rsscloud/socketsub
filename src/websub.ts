@@ -62,7 +62,7 @@ export function signatureValid(
 
 const DELIVERY_BODY_LIMIT_BYTES = 10 * 1024 * 1024;
 
-export function websubRoutes(registry: Registry) {
+export function webSubRoutes(registry: Registry) {
     const routes = new Hono();
     routes.use(bodyLimit({ maxSize: DELIVERY_BODY_LIMIT_BYTES }));
 

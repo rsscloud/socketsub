@@ -67,7 +67,7 @@ function parseNotifyResult(status: number, body: string): NotifyResult {
 
 const NOTIFY_BODY_LIMIT_BYTES = 1024 * 1024;
 
-export function rsscloudRoutes(registry: Registry) {
+export function rssCloudRoutes(registry: Registry) {
     const routes = new Hono();
     routes.use(bodyLimit({ maxSize: NOTIFY_BODY_LIMIT_BYTES }));
 
