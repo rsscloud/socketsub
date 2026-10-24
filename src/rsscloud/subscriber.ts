@@ -12,7 +12,7 @@ export type RssCloudState =
           kind: 'active';
           via: 'rsscloud';
           target: RssCloudTarget;
-          renewTimer: Timer;
+          timer: Timer;
       };
 
 export type RssCloudOutcome =
@@ -47,7 +47,7 @@ export function createRssCloudSubscriber(deps: {
             kind: 'active',
             via: 'rsscloud',
             target,
-            renewTimer: schedule(
+            timer: schedule(
                 () => void renew(feed, target),
                 deps.config.rssCloudRenewMs
             )

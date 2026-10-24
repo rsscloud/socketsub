@@ -34,7 +34,14 @@ export type WebSubState =
           kind: 'active';
           via: 'websub';
           target: WebSubTarget;
-          renewTimer: Timer;
+          renewal: 'scheduled' | 'awaiting-verification';
+          timer: Timer;
+      }
+    | {
+          kind: 'active';
+          via: 'websub';
+          target: WebSubTarget;
+          renewal: 'requested';
       };
 
 export function isWebSubState(state: FeedState): state is WebSubState {
@@ -95,20 +102,31 @@ export function createWebSubSubscriber(deps: {
             leaseSeconds - renewSeconds
         );
         return schedule(async () => {
-            const before = feed.state;
-            const result = await requestSubscription(target);
-            if (!subscription(target.id)) return;
-            if (!result.ok) {
-                fail(feed, target, `WebSub renewal failed: ${result.reason}`);
-                return;
-            }
-            // A verification that already arrived armed the next renewal.
-            if (feed.state !== before) return;
             feed.transition({
                 kind: 'active',
                 via: 'websub',
                 target,
-                renewTimer: schedule(
+                renewal: 'requested'
+            });
+            const result = await requestSubscription(target);
+            const found = subscription(target.id);
+            if (!found) return;
+            if (!result.ok) {
+                fail(feed, target, `WebSub renewal failed: ${result.reason}`);
+                return;
+            }
+            if (
+                found.state.kind !== 'active' ||
+                found.state.renewal !== 'requested'
+            ) {
+                return;
+            }
+            feed.transition({
+                kind: 'active',
+                via: 'websub',
+                target,
+                renewal: 'awaiting-verification',
+                timer: schedule(
                     () =>
                         fail(
                             feed,
@@ -140,7 +158,8 @@ export function createWebSubSubscriber(deps: {
                 kind: 'active',
                 via: 'websub',
                 target: state.target,
-                renewTimer: scheduleRenewal(
+                renewal: 'scheduled',
+                timer: scheduleRenewal(
                     feed,
                     state.target,
                     request.leaseSeconds ?? deps.config.webSubLeaseSeconds

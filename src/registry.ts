@@ -103,7 +103,7 @@ export function createRegistry(deps: RegistryDeps) {
 
     function drop(feed: FeedSub) {
         const { state } = feed;
-        cancelRenewal(state);
+        cancelTimer(state);
         if (isWebSubState(state)) webSubSubscriber.unsubscribe(state.target);
         feeds.delete(feed.key);
         for (const alias of feed.aliases) {
@@ -115,7 +115,7 @@ export function createRegistry(deps: RegistryDeps) {
 
     function transition(feed: FeedSub, state: FeedState) {
         const previous = feed.state;
-        cancelRenewal(previous);
+        cancelTimer(previous);
         feed.state = state;
         if (sameStatus(previous, state)) return;
         for (const [client, url] of feed.clients) {
@@ -288,8 +288,8 @@ function statusMessage(url: string, state: FeedState): StatusMessage {
     }
 }
 
-function cancelRenewal(state: FeedState) {
-    if (state.kind === 'active') clearTimeout(state.renewTimer);
+function cancelTimer(state: FeedState) {
+    if ('timer' in state) clearTimeout(state.timer);
 }
 
 function sameStatus(a: FeedState, b: FeedState): boolean {
