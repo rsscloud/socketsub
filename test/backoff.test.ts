@@ -71,6 +71,33 @@ describe('origin backoff', () => {
         expect(r.cooldown()).toBe(MINUTE);
     });
 
+    it('counts a body that stalls past the timeout as unreachable', async () => {
+        const clock = { now: Date.now, random: () => 0.5 };
+        const backoff = createBackoff(clock);
+        const stalled: typeof fetch = async (_input, init) =>
+            new Response(
+                new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode('<rss>'));
+                        init?.signal?.addEventListener('abort', () =>
+                            controller.error(init.signal?.reason)
+                        );
+                    }
+                })
+            );
+        const get = createFetcher({
+            fetch: stalled,
+            lookup: async () => ['93.184.215.14'],
+            timeoutMs: 20,
+            allowPrivateHosts: false,
+            backoff
+        });
+        await expect(get(URL_A)).rejects.toMatchObject({
+            name: 'TimeoutError'
+        });
+        expect(backoff.cooldownEnd(ORIGIN)).toBeGreaterThan(Date.now());
+    });
+
     it('counts a 429 as a failure', async () => {
         const r = rig();
         r.respond(429);

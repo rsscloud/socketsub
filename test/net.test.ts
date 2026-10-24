@@ -149,6 +149,42 @@ describe('guarded fetcher', () => {
         });
     });
 
+    it('sends at most four requests to an origin at once, timing each from its slot', async () => {
+        let active = 0;
+        let peak = 0;
+        const started: string[] = [];
+        const slowish: typeof fetch = async input => {
+            started.push(String(input));
+            peak = Math.max(peak, ++active);
+            await new Promise(resolve => setTimeout(resolve, 60));
+            active--;
+            return new Response('ok');
+        };
+        const get = createFetcher({
+            fetch: slowish,
+            lookup: publicDns,
+            timeoutMs: 100,
+            allowPrivateHosts: false,
+            backoff: createBackoff({ now: Date.now, random: Math.random })
+        });
+        const urls = Array.from(
+            { length: 8 },
+            (_, i) => `https://busy.example/${i}`
+        );
+        const all = Promise.all(urls.map(url => get(url)));
+        const other = get('https://quiet.example/');
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(started).toEqual([
+            ...urls.slice(0, 4),
+            'https://quiet.example/'
+        ]);
+        const results = await all;
+        await other;
+        expect(results.map(r => r.body)).toEqual(urls.map(() => 'ok'));
+        expect(started.slice(5)).toEqual(urls.slice(4));
+        expect(peak).toBe(5);
+    });
+
     it('reports a refused feed to the client as an error', async () => {
         const s = setup();
         s.net.feed('http://127.0.0.1/feed', fixture('rss-cloud.xml'));
