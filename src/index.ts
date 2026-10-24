@@ -1,10 +1,12 @@
 import { serve } from '@hono/node-server';
-import { Hono } from 'hono';
+import { createApp } from './app.js';
+import { loadConfig } from './config.js';
 
-const app = new Hono();
-app.get('/health', c => c.json({ ok: true }));
+const config = loadConfig(process.env);
+const { app } = createApp({ config, fetch: globalThis.fetch });
 
-const port = Number(process.env.PORT ?? 3000);
-serve({ fetch: app.fetch, port }, info => {
-    console.log(`socketsub listening on :${info.port}`);
+serve({ fetch: app.fetch, port: config.port }, info => {
+    console.log(
+        `socketsub listening on :${info.port} (public ${config.publicUrl.href})`
+    );
 });
