@@ -17,6 +17,27 @@ per feed. When the last client for a feed disconnects, socketsub unsubscribes
 from WebSub or stops renewing the rssCloud registration. State is held in
 memory only.
 
+## Failures and retries
+
+socketsub tracks failures per server: the feed's host, the rssCloud server, or
+the WebSub hub. A network error, timeout, HTTP 5xx, or 429 puts that server on a
+cooldown. The cooldown starts at 1 minute, doubles with each further failure up
+to 1 hour, and varies by 20% so retries spread out. A `Retry-After` header on a
+429 or 503 can lengthen it, up to 6 hours. socketsub sends nothing to a server
+during its cooldown. After it, one request tests the server before the others
+go. A success ends the cooldown. Other 4xx answers and an rssCloud refusal fail
+the feed but start no cooldown.
+
+When a renewal fails with a cooldown, the feed stays `subscribed`, because the
+old registration or lease still holds. socketsub retries after each cooldown. If
+the next retry would land after the registration (25 hours after the last
+rssCloud success) or the WebSub lease ends, the feed moves to `error`.
+
+A feed in `error` or `unsupported` stays that way while clients follow it. A
+new subscribe to it starts over from discovery once enough time has passed. For
+`error`, that is the end of the server's cooldown and at least 1 minute. For
+`unsupported`, it is 1 hour. A subscribe before then gets the current status.
+
 ## WebSocket protocol
 
 Connect to `/ws` and send JSON text messages. Each has a `type` and a `urls`

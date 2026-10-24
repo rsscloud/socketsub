@@ -169,13 +169,17 @@
                     <td><code>subscribed</code></td>
                     <td>
                         You will get <code>update</code> messages for this feed.
+                        A failed renewal does not change this state. socketsub
+                        retries in the background while the old registration
+                        still holds.
                     </td>
                 </tr>
                 <tr>
                     <td><code>unsupported</code></td>
                     <td>
                         The feed advertises neither rssCloud nor WebSub. You
-                        will not get updates for it.
+                        will not get updates for it. A subscribe at least an
+                        hour later checks the feed again.
                     </td>
                 </tr>
                 <tr>
@@ -183,7 +187,11 @@
                     <td>
                         The URL was invalid, a limit was reached, the feed could
                         not be fetched, or the subscription failed. See
-                        <code>detail</code>. You will not get updates for it.
+                        <code>detail</code>. You will not get updates for it. To
+                        retry, subscribe again later. socketsub retries a failed
+                        feed at most once a minute, and waits longer while the
+                        server keeps failing. Before then, a subscribe gets the
+                        same <code>error</code>.
                     </td>
                 </tr>
                 <tr>
