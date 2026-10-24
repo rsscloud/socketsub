@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
-import type { Config } from './config.js';
+import { webSocketUrl, type Config } from './config.js';
 import { createFetcher, type Lookup } from './net.js';
 import { createRegistry } from './registry.js';
 import { rssCloudRoutes } from './rsscloud/routes.js';
@@ -16,10 +16,33 @@ export type AppDeps = {
     lookup: Lookup;
 };
 
-const testClientPage = readFileSync(
-    new URL('../public/index.html', import.meta.url),
-    'utf8'
-);
+function readPage(name: string): string {
+    return readFileSync(new URL(`../public/${name}`, import.meta.url), 'utf8');
+}
+
+const homeTemplate = readPage('index.html');
+const docsTemplate = readPage('docs.html');
+
+function renderPage(template: string, config: Config): string {
+    const values: Record<string, string> = {
+        wsUrl: webSocketUrl(config),
+        maxFeedsPerMessage: String(config.maxFeedsPerMessage),
+        maxFeedsPerClient: String(config.maxFeedsPerClient),
+        maxFeeds: String(config.maxFeeds)
+    };
+    return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
+        key in values ? escapeHtml(values[key] ?? '') : match
+    );
+}
+
+function escapeHtml(text: string): string {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
 
 export function createApp(deps: AppDeps) {
     const { config } = deps;
@@ -38,7 +61,11 @@ export function createApp(deps: AppDeps) {
     });
     const registry = createRegistry({ config, fetcher });
 
-    app.get('/', c => c.html(testClientPage));
+    const homePage = renderPage(homeTemplate, config);
+    const docsPage = renderPage(docsTemplate, config);
+
+    app.get('/', c => c.html(homePage));
+    app.get('/docs', c => c.html(docsPage));
     app.get('/health', c => c.json({ ok: true }));
     app.route('/rsscloud', rssCloudRoutes(registry.rssCloud));
     app.route('/websub', webSubRoutes(registry.webSub));

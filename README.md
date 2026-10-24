@@ -77,7 +77,8 @@ before forwarding. The service itself always serves its routes at the root.
 
 | Route                        | Purpose                                       |
 | ---------------------------- | --------------------------------------------- |
-| `GET /`                      | Browser test client.                          |
+| `GET /`                      | Home page with a socklog-based test client.   |
+| `GET /docs`                  | Client protocol documentation.                |
 | `GET /ws`                    | WebSocket endpoint.                           |
 | `GET /health`                | Health check.                                 |
 | `GET, POST /rsscloud/notify` | rssCloud challenge and notification callback. |
