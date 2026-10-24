@@ -34,6 +34,8 @@ export type FeedHandle = {
     sendUpdate(): void;
 };
 
+type Admission = { ok: true; key: FeedKey } | { ok: false; detail: string };
+
 type FeedSub = {
     key: FeedKey;
     state: FeedState;
@@ -121,6 +123,46 @@ export function createRegistry(deps: RegistryDeps) {
         }
     }
 
+    function admit(followed: Set<FeedKey>, url: string): Admission {
+        const { maxFeedsPerClient, maxFeeds } = deps.config;
+        const key = toFeedKey(url);
+        if (key === undefined) {
+            return { ok: false, detail: 'not a valid http(s) URL' };
+        }
+        if (!followed.has(key) && followed.size >= maxFeedsPerClient) {
+            return {
+                ok: false,
+                detail: `this connection already follows the maximum of ${maxFeedsPerClient} feeds`
+            };
+        }
+        if (!feeds.has(key) && feeds.size >= maxFeeds) {
+            return {
+                ok: false,
+                detail: `the server already follows the maximum of ${maxFeeds} feeds`
+            };
+        }
+        return { ok: true, key };
+    }
+
+    function follow(client: Client, url: string, key: FeedKey) {
+        const existing = feeds.get(key);
+        if (existing) {
+            existing.clients.set(client, url);
+            client.send(statusMessage(url, existing.state));
+            return;
+        }
+        const feed: FeedSub = {
+            key,
+            state: { kind: 'discovering' },
+            clients: new Map([[client, url]]),
+            aliases: new Set()
+        };
+        feeds.set(key, feed);
+        addAlias(feed, key);
+        client.send(statusMessage(url, feed.state));
+        void start(feed);
+    }
+
     async function start(feed: FeedSub) {
         let discovery: Discovery | undefined;
         try {
@@ -178,48 +220,21 @@ export function createRegistry(deps: RegistryDeps) {
 
     return {
         add(client: Client, urls: readonly string[]) {
-            const { maxFeedsPerClient, maxFeeds } = deps.config;
             let followed = clientFeeds.get(client);
             if (!followed) clientFeeds.set(client, (followed = new Set()));
-            const reject = (url: string, detail: string) =>
-                client.send({ type: 'status', url, state: 'error', detail });
             for (const url of urls) {
-                const key = toFeedKey(url);
-                if (key === undefined) {
-                    reject(url, 'not a valid http(s) URL');
-                    continue;
-                }
-                const existing = feeds.get(key);
-                if (!followed.has(key) && followed.size >= maxFeedsPerClient) {
-                    reject(
+                const admission = admit(followed, url);
+                if (!admission.ok) {
+                    client.send({
+                        type: 'status',
                         url,
-                        `this connection already follows the maximum of ${maxFeedsPerClient} feeds`
-                    );
+                        state: 'error',
+                        detail: admission.detail
+                    });
                     continue;
                 }
-                if (!existing && feeds.size >= maxFeeds) {
-                    reject(
-                        url,
-                        `the server already follows the maximum of ${maxFeeds} feeds`
-                    );
-                    continue;
-                }
-                followed.add(key);
-                if (existing) {
-                    existing.clients.set(client, url);
-                    client.send(statusMessage(url, existing.state));
-                    continue;
-                }
-                const feed: FeedSub = {
-                    key,
-                    state: { kind: 'discovering' },
-                    clients: new Map([[client, url]]),
-                    aliases: new Set()
-                };
-                feeds.set(key, feed);
-                addAlias(feed, key);
-                client.send(statusMessage(url, feed.state));
-                void start(feed);
+                followed.add(admission.key);
+                follow(client, url, admission.key);
             }
         },
 
