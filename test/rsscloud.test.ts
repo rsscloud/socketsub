@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixture, gate } from './support/fake-net.js';
 import {
+    failingUpstream,
     fakeCloud,
     recordingClient,
     settle,
@@ -180,7 +181,7 @@ describe('rssCloud callback routes', () => {
 
 describe('rssCloud renewal', () => {
     beforeEach(() => {
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     });
     afterEach(() => {
         vi.useRealTimers();
@@ -244,5 +245,136 @@ describe('rssCloud renewal', () => {
             state: 'pending',
             via: 'rsscloud'
         });
+    });
+});
+
+describe('rssCloud renewal retries', () => {
+    const HOUR = 3600_000;
+    const MINUTE = 60_000;
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    async function registered(feeds = [FEED]) {
+        const s = setup();
+        for (const feed of feeds) s.net.feed(feed, fixture('rss-cloud.xml'));
+        fakeCloud(s, CLOUD);
+        const clients = feeds.map(() => recordingClient());
+        feeds.forEach((feed, i) => s.registry.subscribe(clients[i]!, [feed]));
+        await settle();
+        return { s, clients, start: Date.now() };
+    }
+
+    async function advance(ms: number) {
+        await vi.advanceTimersByTimeAsync(ms);
+        await settle();
+    }
+
+    const subscribed = {
+        type: 'status',
+        url: FEED,
+        state: 'subscribed',
+        via: 'rsscloud'
+    };
+
+    it('stays subscribed and retries a failed renewal with growing backoff', async () => {
+        const { s, clients, start } = await registered();
+        const times = failingUpstream(s, CLOUD);
+        await advance(24 * HOUR + 3 * MINUTE);
+        expect(times.map(t => t - start)).toEqual([
+            24 * HOUR,
+            24 * HOUR + MINUTE,
+            24 * HOUR + 3 * MINUTE
+        ]);
+        expect(clients[0]!.messages.at(-1)).toEqual(subscribed);
+        expect(clients[0]!.messages).toHaveLength(3);
+
+        const cloud = fakeCloud(s, CLOUD);
+        await advance(4 * MINUTE);
+        expect(cloud.challenges).toEqual([{ status: 200, body: 'c-123' }]);
+        await advance(24 * HOUR - 1);
+        expect(cloud.challenges).toHaveLength(1);
+        await advance(1);
+        expect(cloud.challenges).toHaveLength(2);
+        expect(clients[0]!.messages).toHaveLength(3);
+    });
+
+    it('fails before the registration expires when renewals keep failing', async () => {
+        const { s, clients, start } = await registered();
+        const times = failingUpstream(s, CLOUD);
+        await advance(25 * HOUR);
+        expect(clients[0]!.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'error',
+            via: 'rsscloud',
+            detail: 'rssCloud renewal failed: unexpected response (HTTP 503); the registration expires before the cloud can be retried'
+        });
+        await advance(24 * HOUR);
+        expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
+            0, 1, 3, 7, 15, 31
+        ]);
+    });
+
+    it('spaces requests to a failing cloud by one shared cooldown across feeds', async () => {
+        const other = 'https://other.example/feed.xml';
+        const { s, clients, start } = await registered([FEED, other]);
+        const times = failingUpstream(s, CLOUD);
+        await advance(24 * HOUR + 10 * MINUTE);
+        expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
+            0, 1, 3, 7
+        ]);
+
+        const cloud = fakeCloud(s, CLOUD);
+        await advance(10 * MINUTE);
+        expect(cloud.challenges).toHaveLength(2);
+        for (const client of clients) {
+            expect(client.messages.at(-1)).toMatchObject({
+                state: 'subscribed'
+            });
+        }
+    });
+
+    it('waits as long as the cloud asks with Retry-After', async () => {
+        const { s, clients, start } = await registered();
+        const times = failingUpstream(s, CLOUD, 503, { 'retry-after': '1800' });
+        await advance(26 * HOUR);
+        expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
+            0, 30
+        ]);
+        expect(clients[0]!.messages.at(-1)).toMatchObject({
+            state: 'error',
+            detail: expect.stringContaining(
+                'expires before the cloud can be retried'
+            )
+        });
+    });
+
+    it('fails on a refused renewal without cooling the cloud for other feeds', async () => {
+        const { s, clients } = await registered();
+        fakeCloud(s, CLOUD, { refuse: 'Feed is not reachable.' });
+        await advance(24 * HOUR);
+        expect(clients[0]!.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'error',
+            via: 'rsscloud',
+            detail: 'rssCloud renewal failed: Feed is not reachable.'
+        });
+        const before = s.net.to(CLOUD).length;
+        await advance(HOUR);
+        expect(s.net.to(CLOUD)).toHaveLength(before);
+
+        const other = 'https://other.example/feed.xml';
+        s.net.feed(other, fixture('rss-cloud.xml'));
+        fakeCloud(s, CLOUD);
+        const late = recordingClient();
+        s.registry.subscribe(late, [other]);
+        await settle();
+        expect(late.messages.at(-1)).toMatchObject({ state: 'subscribed' });
     });
 });

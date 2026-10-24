@@ -206,3 +206,17 @@ export function fakeHub(env: Setup, hubUrl: string, status = 202) {
         }
     };
 }
+
+export function failingUpstream(
+    env: Setup,
+    url: string,
+    status = 503,
+    headers: Record<string, string> = {}
+): number[] {
+    const times: number[] = [];
+    env.net.on(url, () => {
+        times.push(Date.now());
+        return new Response(null, { status, headers });
+    });
+    return times;
+}

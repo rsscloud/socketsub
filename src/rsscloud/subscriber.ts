@@ -1,8 +1,10 @@
-import { rssCloudCallback, type Config } from '../config.js';
-import type { Fetcher } from '../net.js';
-import type { FeedHandle, FeedState } from '../registry.js';
+import { rssCloudCallback } from '../config.js';
+import type { FeedHandle, FeedState, RegistryDeps } from '../registry.js';
 import { schedule, type Timer } from '../timer.js';
 import { pleaseNotify } from './client.js';
+
+// Clouds drop registrations not renewed within 25 hours.
+const REGISTRATION_TTL_MS = 25 * 3600_000;
 
 export type RssCloudTarget = { endpoint: URL; topic: string };
 
@@ -27,10 +29,7 @@ export function isRssCloudState(state: FeedState): state is RssCloudState {
     );
 }
 
-export function createRssCloudSubscriber(deps: {
-    config: Config;
-    fetcher: Fetcher;
-}) {
+export function createRssCloudSubscriber(deps: RegistryDeps) {
     const callback = rssCloudCallback(deps.config);
 
     function register(target: RssCloudTarget) {
@@ -43,26 +42,53 @@ export function createRssCloudSubscriber(deps: {
     }
 
     function activate(feed: FeedHandle, target: RssCloudTarget) {
+        scheduleRenewal(
+            feed,
+            target,
+            deps.now() + REGISTRATION_TTL_MS,
+            deps.config.rssCloudRenewMs
+        );
+    }
+
+    function scheduleRenewal(
+        feed: FeedHandle,
+        target: RssCloudTarget,
+        expiresAt: number,
+        delayMs: number
+    ) {
         feed.transition({
             kind: 'active',
             via: 'rsscloud',
             target,
-            timer: schedule(
-                () => void renew(feed, target),
-                deps.config.rssCloudRenewMs
-            )
+            timer: schedule(() => void renew(feed, target, expiresAt), delayMs)
         });
     }
 
-    async function renew(feed: FeedHandle, target: RssCloudTarget) {
+    async function renew(
+        feed: FeedHandle,
+        target: RssCloudTarget,
+        expiresAt: number
+    ) {
         const result = await register(target);
         if (!feed.isLive()) return;
         if (result.ok) {
             activate(feed, target);
             return;
         }
+        const plan = deps.backoff.retryBefore(
+            target.endpoint.origin,
+            expiresAt
+        );
+        if (plan.kind === 'retry') {
+            scheduleRenewal(feed, target, expiresAt, plan.at - deps.now());
+            return;
+        }
+        const late =
+            plan.kind === 'too-late'
+                ? '; the registration expires before the cloud can be retried'
+                : '';
         feed.fail(
-            `rssCloud renewal failed: ${result.reason}`,
+            `rssCloud renewal failed: ${result.reason}${late}`,
             'rsscloud',
             target.endpoint
         );

@@ -13,9 +13,13 @@ export type Exchange =
 
 export type Attempt = { finish(exchange: Exchange): void };
 
+export type RetryPlan =
+    { kind: 'retry'; at: number } | { kind: 'refused' } | { kind: 'too-late' };
+
 export type Backoff = {
     begin(origin: string): Attempt;
     cooldownEnd(origin: string): number | undefined;
+    retryBefore(origin: string, deadline: number): RetryPlan;
 };
 
 export class CoolingDownError extends Error {
@@ -75,6 +79,16 @@ export function createBackoff(clock: Clock): Backoff {
 
     return {
         cooldownEnd,
+
+        // Read right after a request failed: only a transient failure leaves
+        // its origin cooling down, so no cooldown means a refusal.
+        retryBefore(origin, deadline) {
+            const end = cooldownEnd(origin);
+            if (end === undefined) return { kind: 'refused' };
+            return end < deadline
+                ? { kind: 'retry', at: end }
+                : { kind: 'too-late' };
+        },
 
         begin(origin) {
             const end = cooldownEnd(origin);
