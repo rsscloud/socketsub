@@ -1,7 +1,9 @@
-import { rsscloudCallback, type Config } from './config.js';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { callbackUrl, rsscloudCallback, type Config } from './config.js';
 import { discover, type Discovery } from './discover.js';
 import type { Fetcher } from './net.js';
 import { pleaseNotify, type NotifyResult } from './rsscloud.js';
+import { hubRequest, type HubResult } from './websub.js';
 
 export type Via = 'rsscloud' | 'websub';
 
@@ -26,13 +28,27 @@ type Timer = ReturnType<typeof setTimeout>;
 
 type RssCloudTarget = { endpoint: URL; topic: string };
 
+type WebSubTarget = { hub: URL; topic: string; id: string; secret: string };
+
 export type FeedState =
     | { kind: 'discovering' }
     | { kind: 'subscribing'; via: 'rsscloud'; target: RssCloudTarget }
     | {
+          kind: 'subscribing';
+          via: 'websub';
+          target: WebSubTarget;
+          detail?: string;
+      }
+    | {
           kind: 'active';
           via: 'rsscloud';
           target: RssCloudTarget;
+          renewTimer: Timer;
+      }
+    | {
+          kind: 'active';
+          via: 'websub';
+          target: WebSubTarget;
           renewTimer: Timer;
       }
     | { kind: 'unsupported'; detail: string }
@@ -74,6 +90,8 @@ export function createRegistry(deps: RegistryDeps) {
     const aliasIndex = new Map<string, Set<FeedKey>>();
     const limit = createLimiter(deps.config.discoveryConcurrency);
     const callback = rsscloudCallback(deps.config);
+    const websubFeeds = new Map<string, FeedKey>();
+    const websubUnsubscribing = new Map<string, WebSubTarget>();
 
     function isLive(feed: FeedSub): boolean {
         return feeds.get(feed.key) === feed;
@@ -88,8 +106,35 @@ export function createRegistry(deps: RegistryDeps) {
         keys.add(feed.key);
     }
 
+    function webSubFeed(id: string) {
+        const key = websubFeeds.get(id);
+        const feed = key === undefined ? undefined : feeds.get(key);
+        const state = feed?.state;
+        if (
+            !feed ||
+            (state?.kind !== 'subscribing' && state?.kind !== 'active') ||
+            state.via !== 'websub' ||
+            state.target.id !== id
+        ) {
+            return undefined;
+        }
+        return { feed, state };
+    }
+
     function drop(feed: FeedSub) {
-        if (feed.state.kind === 'active') clearTimeout(feed.state.renewTimer);
+        const { state } = feed;
+        if (state.kind === 'active') clearTimeout(state.renewTimer);
+        if (
+            (state.kind === 'subscribing' || state.kind === 'active') &&
+            state.via === 'websub'
+        ) {
+            const { target } = state;
+            websubFeeds.delete(target.id);
+            websubUnsubscribing.set(target.id, target);
+            void requestHub(target, 'unsubscribe').then(result => {
+                if (!result.ok) websubUnsubscribing.delete(target.id);
+            });
+        }
         feeds.delete(feed.key);
         for (const alias of feed.aliases) {
             const keys = aliasIndex.get(alias);
@@ -122,37 +167,128 @@ export function createRegistry(deps: RegistryDeps) {
         if (!discovery || !isLive(feed)) return;
         addAlias(feed, discovery.finalUrl);
 
+        let rsscloudFailure: string | undefined;
         if (discovery.rsscloud) {
-            const target = {
+            rsscloudFailure = await subscribeRssCloud(feed, {
                 endpoint: discovery.rsscloud.endpoint,
                 topic: discovery.finalUrl
-            };
-            // The cloud may call our challenge route before pleaseNotify
-            // returns, so the feed must already be in a subscribing state.
-            setState(feed, { kind: 'subscribing', via: 'rsscloud', target });
-            const result = await registerRssCloud(target);
-            if (!isLive(feed)) return;
-            if (result.success) {
-                setState(feed, {
-                    kind: 'active',
-                    via: 'rsscloud',
-                    target,
-                    renewTimer: scheduleRssCloudRenewal(feed, target)
-                });
-                return;
-            }
-            setState(feed, {
-                kind: 'failed',
-                via: 'rsscloud',
-                reason: `rssCloud registration failed: ${result.msg}`
             });
+            if (rsscloudFailure === undefined || !isLive(feed)) return;
+        }
+        if (discovery.websub) {
+            await subscribeWebSub(feed, discovery.websub, rsscloudFailure);
             return;
         }
+        setState(
+            feed,
+            rsscloudFailure === undefined
+                ? {
+                      kind: 'unsupported',
+                      detail: 'feed advertises neither rssCloud nor WebSub'
+                  }
+                : { kind: 'failed', via: 'rsscloud', reason: rsscloudFailure }
+        );
+    }
 
+    async function subscribeRssCloud(
+        feed: FeedSub,
+        target: RssCloudTarget
+    ): Promise<string | undefined> {
+        // The cloud may call our challenge route before pleaseNotify
+        // returns, so the feed must already be in a subscribing state.
+        setState(feed, { kind: 'subscribing', via: 'rsscloud', target });
+        const result = await registerRssCloud(target);
+        if (!isLive(feed)) return undefined;
+        if (!result.success) {
+            return `rssCloud registration failed: ${result.msg}`;
+        }
         setState(feed, {
-            kind: 'unsupported',
-            detail: 'feed advertises neither rssCloud nor WebSub'
+            kind: 'active',
+            via: 'rsscloud',
+            target,
+            renewTimer: scheduleRssCloudRenewal(feed, target)
         });
+        return undefined;
+    }
+
+    async function subscribeWebSub(
+        feed: FeedSub,
+        found: { hub: URL; topic: string },
+        rsscloudFailure: string | undefined
+    ) {
+        const target: WebSubTarget = {
+            ...found,
+            id: randomUUID(),
+            secret: randomBytes(24).toString('hex')
+        };
+        addAlias(feed, target.topic);
+        websubFeeds.set(target.id, feed.key);
+        setState(feed, {
+            kind: 'subscribing',
+            via: 'websub',
+            target,
+            ...(rsscloudFailure && {
+                detail: `${rsscloudFailure}; trying WebSub`
+            })
+        });
+        const result = await requestHub(target, 'subscribe');
+        // A teardown during the request already sent the unsubscribe.
+        if (result.ok || !webSubFeed(target.id)) return;
+        websubFeeds.delete(target.id);
+        setState(feed, {
+            kind: 'failed',
+            via: 'websub',
+            reason: [
+                rsscloudFailure,
+                `WebSub subscribe failed: ${result.detail}`
+            ]
+                .filter(Boolean)
+                .join('; ')
+        });
+    }
+
+    async function requestHub(
+        target: WebSubTarget,
+        mode: 'subscribe' | 'unsubscribe'
+    ): Promise<HubResult> {
+        const common = {
+            topic: target.topic,
+            callback: callbackUrl(deps.config, `/websub/${target.id}`)
+        };
+        try {
+            return await hubRequest(
+                deps.fetcher,
+                target.hub,
+                mode === 'subscribe'
+                    ? {
+                          mode,
+                          ...common,
+                          secret: target.secret,
+                          leaseSeconds: deps.config.websubLeaseSeconds
+                      }
+                    : { mode, ...common }
+            );
+        } catch (err) {
+            return { ok: false, detail: errorText(err) };
+        }
+    }
+
+    function scheduleWebSubRenewal(
+        feed: FeedSub,
+        target: WebSubTarget,
+        leaseSeconds: number
+    ): Timer {
+        const delayMs = Math.max(60, Math.floor(leaseSeconds * 0.9)) * 1000;
+        return setTimeout(async () => {
+            const result = await requestHub(target, 'subscribe');
+            if (result.ok || !webSubFeed(target.id)) return;
+            websubFeeds.delete(target.id);
+            setState(feed, {
+                kind: 'failed',
+                via: 'websub',
+                reason: `WebSub renewal failed: ${result.detail}`
+            });
+        }, delayMs);
     }
 
     async function registerRssCloud(
@@ -248,6 +384,65 @@ export function createRegistry(deps: RegistryDeps) {
             });
         },
 
+        verifyWebSub(
+            id: string,
+            intent: {
+                mode: 'subscribe' | 'unsubscribe';
+                topic: string;
+                leaseSeconds?: number;
+            }
+        ): boolean {
+            if (intent.mode === 'unsubscribe') {
+                const target = websubUnsubscribing.get(id);
+                if (!target || !sameUrl(target.topic, intent.topic)) {
+                    return false;
+                }
+                websubUnsubscribing.delete(id);
+                return true;
+            }
+            const found = webSubFeed(id);
+            if (!found || !sameUrl(found.state.target.topic, intent.topic)) {
+                return false;
+            }
+            const { feed, state } = found;
+            if (state.kind === 'active') clearTimeout(state.renewTimer);
+            const next: FeedState = {
+                kind: 'active',
+                via: 'websub',
+                target: state.target,
+                renewTimer: scheduleWebSubRenewal(
+                    feed,
+                    state.target,
+                    intent.leaseSeconds ?? deps.config.websubLeaseSeconds
+                )
+            };
+            if (state.kind === 'active') feed.state = next;
+            else setState(feed, next);
+            return true;
+        },
+
+        denyWebSub(id: string, reason: string) {
+            websubUnsubscribing.delete(id);
+            const found = webSubFeed(id);
+            if (!found) return;
+            if (found.state.kind === 'active') {
+                clearTimeout(found.state.renewTimer);
+            }
+            websubFeeds.delete(id);
+            setState(found.feed, {
+                kind: 'failed',
+                via: 'websub',
+                reason: `WebSub hub denied the subscription: ${reason}`
+            });
+        },
+
+        webSubSubscription(
+            id: string
+        ): { secret: string; topic: string } | undefined {
+            const target = webSubFeed(id)?.state.target;
+            return target && { secret: target.secret, topic: target.topic };
+        },
+
         notify(url: string): boolean {
             const alias = normalizeUrl(url);
             const keys =
@@ -272,7 +467,14 @@ function statusMessage(url: string, state: FeedState): StatusMessage {
         case 'discovering':
             return { type: 'status', url, state: 'pending' };
         case 'subscribing':
-            return { type: 'status', url, state: 'pending', via: state.via };
+            return {
+                type: 'status',
+                url,
+                state: 'pending',
+                via: state.via,
+                ...('detail' in state &&
+                    state.detail && { detail: state.detail })
+            };
         case 'active':
             return { type: 'status', url, state: 'subscribed', via: state.via };
         case 'unsupported':
@@ -291,6 +493,10 @@ function statusMessage(url: string, state: FeedState): StatusMessage {
                 detail: state.reason
             };
     }
+}
+
+function sameUrl(a: string, b: string): boolean {
+    return (normalizeUrl(a) ?? a) === (normalizeUrl(b) ?? b);
 }
 
 function errorText(err: unknown): string {

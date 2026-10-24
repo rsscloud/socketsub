@@ -139,3 +139,48 @@ export function fakeCloud(
     });
     return { requests: () => env.net.to(endpoint), challenges };
 }
+
+export function fakeHub(env: Setup, hubUrl: string, status = 202) {
+    env.net.on(hubUrl, () => new Response(null, { status }));
+    const requests = () => env.net.to(hubUrl);
+    return {
+        requests,
+        subscribes: () =>
+            requests().filter(r => r.form.get('hub.mode') === 'subscribe'),
+        unsubscribes: () =>
+            requests().filter(r => r.form.get('hub.mode') === 'unsubscribe'),
+        async verify(
+            request: { form: URLSearchParams } | undefined,
+            overrides: Record<string, string> = {}
+        ) {
+            if (!request) throw new Error('no hub request to verify');
+            const callback = new URL(request.form.get('hub.callback') ?? '');
+            const query = new URLSearchParams({
+                'hub.mode': request.form.get('hub.mode') ?? '',
+                'hub.topic': request.form.get('hub.topic') ?? '',
+                'hub.challenge': 'hub-challenge',
+                'hub.lease_seconds':
+                    request.form.get('hub.lease_seconds') ?? '86400',
+                ...overrides
+            });
+            return env.app.request(`${callback.pathname}?${query}`);
+        },
+        deliver(
+            request: { form: URLSearchParams } | undefined,
+            body: string,
+            signature: (secret: string, body: string) => string | undefined
+        ) {
+            if (!request) throw new Error('no hub request to deliver to');
+            const callback = new URL(request.form.get('hub.callback') ?? '');
+            const header = signature(
+                request.form.get('hub.secret') ?? '',
+                body
+            );
+            return env.app.request(callback.pathname, {
+                method: 'POST',
+                headers: header ? { 'x-hub-signature': header } : {},
+                body
+            });
+        }
+    };
+}

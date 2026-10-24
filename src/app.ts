@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import { createFetcher } from './net.js';
 import { createRegistry } from './registry.js';
 import { rsscloudRoutes } from './rsscloud.js';
+import { websubRoutes } from './websub.js';
 import { wsHandler } from './ws.js';
 
 export type AppDeps = {
@@ -23,6 +24,7 @@ export function createApp(deps: AppDeps) {
 
     app.get('/health', c => c.json({ ok: true }));
     app.route('/rsscloud', rsscloudRoutes(registry));
+    app.route('/websub', websubRoutes(registry));
     app.get(
         '/ws',
         wsHandler(upgradeWebSocket, registry, config.maxFeedsPerMessage)
