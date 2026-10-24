@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
 import type { Config } from './config.js';
@@ -13,6 +14,11 @@ export type AppDeps = {
     lookup: Lookup;
 };
 
+const testClientPage = readFileSync(
+    new URL('../public/index.html', import.meta.url),
+    'utf8'
+);
+
 export function createApp(deps: AppDeps) {
     const { config } = deps;
     const app = new Hono();
@@ -25,6 +31,7 @@ export function createApp(deps: AppDeps) {
     });
     const registry = createRegistry({ config, fetcher });
 
+    app.get('/', c => c.html(testClientPage));
     app.get('/health', c => c.json({ ok: true }));
     app.route('/rsscloud', rsscloudRoutes(registry));
     app.route('/websub', websubRoutes(registry));
