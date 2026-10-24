@@ -59,25 +59,45 @@
         <p>
             All messages in both directions are JSON text frames. Feeds belong
             to the connection: when it closes, socketsub forgets them. After a
-            reconnect, send your feed list again.
+            reconnect, subscribe to your feeds again.
         </p>
 
-        <h2>Send feeds</h2>
-        <p>Send a JSON array of feed URL strings:</p>
-        <pre>["https://example.com/feed.xml", "https://blog.example/atom"]</pre>
+        <h2>Send messages</h2>
+        <p>
+            Every message you send is a JSON object with a <code>type</code> and
+            a <code>urls</code> array of feed URL strings.
+        </p>
+
+        <h3><code>subscribe</code></h3>
+        <pre>
+{
+  "type": "subscribe",
+  "urls": ["https://example.com/feed.xml", "https://blog.example/atom"]
+}</pre>
         <ul>
             <li>
-                Each array adds to the feeds this connection already follows.
-                Sending a URL again is harmless.
+                Each subscribe adds to the feeds this connection already
+                follows. Subscribing to a URL again is harmless.
             </li>
             <li>
                 Use the feed's URL, not the URL of a web page. Only
                 <code>http</code> and <code>https</code> URLs are accepted.
             </li>
+        </ul>
+
+        <h3><code>unsubscribe</code></h3>
+        <pre>
+{
+  "type": "unsubscribe",
+  "urls": ["https://example.com/feed.xml"]
+}</pre>
+        <ul>
             <li>
-                There is no message to stop following a feed. Close the
-                connection instead.
+                Each URL gets a <code>status</code> with state
+                <code>unsubscribed</code>, even if this connection never
+                followed it.
             </li>
+            <li>Closing the connection unsubscribes from everything.</li>
         </ul>
 
         <h2>Receive messages</h2>
@@ -89,8 +109,8 @@
 
         <h3><code>status</code></h3>
         <p>
-            Sent once for each URL you send, and again each time that feed's
-            state changes.
+            Sent once for each URL you subscribe to, again each time that feed's
+            state changes, and once for each URL you unsubscribe from.
         </p>
         <pre>
 {
@@ -166,6 +186,13 @@
                         <code>detail</code>. You will not get updates for it.
                     </td>
                 </tr>
+                <tr>
+                    <td><code>unsubscribed</code></td>
+                    <td>
+                        Your unsubscribe went through. You will not get updates
+                        for it.
+                    </td>
+                </tr>
             </tbody>
         </table>
 
@@ -178,23 +205,26 @@
 
         <h3><code>error</code></h3>
         <p>
-            Sent when a whole message is rejected: it is not JSON, not an array
-            of strings, or has too many URLs. Problems with a single URL come
-            back as a <code>status</code> with state <code>error</code>
+            Sent when a whole message is rejected: it is not JSON, has no valid
+            <code>type</code>, its <code>urls</code> is not an array of strings,
+            or it has too many URLs. Problems with a single URL come back as a
+            <code>status</code> with state <code>error</code>
             instead.
         </p>
         <pre>{ "type": "error", "message": "message is not valid JSON" }</pre>
 
         <h2>Example session</h2>
         <pre>
-&gt; ["http://scripting.com/rss.xml", "https://xkcd.com/rss.xml"]
+&gt; {"type":"subscribe","urls":["http://scripting.com/rss.xml","https://xkcd.com/rss.xml"]}
 &lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"pending"}
 &lt; {"type":"status","url":"https://xkcd.com/rss.xml","state":"pending"}
 &lt; {"type":"status","url":"https://xkcd.com/rss.xml","state":"unsupported","detail":"feed advertises neither rssCloud nor WebSub"}
 &lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"pending","via":"rsscloud"}
 &lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"subscribed","via":"rsscloud"}
 ...
-&lt; {"type":"update","url":"http://scripting.com/rss.xml"}</pre>
+&lt; {"type":"update","url":"http://scripting.com/rss.xml"}
+&gt; {"type":"unsubscribe","urls":["http://scripting.com/rss.xml"]}
+&lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"unsubscribed"}</pre>
 
         <h2>Example client</h2>
         <pre>
@@ -202,7 +232,7 @@ const feeds = ['http://scripting.com/rss.xml'];
 const socket = new WebSocket('{{wsUrl}}');
 
 socket.addEventListener('open', () =&gt; {
-    socket.send(JSON.stringify(feeds));
+    socket.send(JSON.stringify({ type: 'subscribe', urls: feeds }));
 });
 
 socket.addEventListener('message', event =&gt; {

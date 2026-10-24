@@ -4,6 +4,16 @@ import type { ServerMessage } from '../src/messages.js';
 import { fakeCloud, listen, setup, WsClient } from './support/harness.js';
 
 const FEED = 'https://blog.example/feed.xml';
+const SHAPE =
+    'message must be {"type": "subscribe" | "unsubscribe", "urls": [...]}';
+
+function subscribe(...urls: string[]) {
+    return { type: 'subscribe', urls };
+}
+
+function unsubscribe(...urls: string[]) {
+    return { type: 'unsubscribe', urls };
+}
 const cleanup: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
@@ -23,11 +33,11 @@ async function start(env: Record<string, string> = {}) {
 }
 
 describe('websocket protocol', () => {
-    it('streams status messages for each feed in the array', async () => {
+    it('streams status messages for each subscribed feed', async () => {
         const { net, connect } = await start();
         net.feed(FEED, fixture('none.xml'));
         const client = await connect();
-        client.send([FEED]);
+        client.send(subscribe(FEED));
         const messages = await client.waitFor(m => m.length >= 2);
         expect(messages).toEqual([
             { type: 'status', url: FEED, state: 'pending' },
@@ -42,15 +52,18 @@ describe('websocket protocol', () => {
 
     it.each([
         ['invalid JSON', '{nope', 'message is not valid JSON'],
+        ['a bare array', [FEED], SHAPE],
+        ['an unknown type', { type: 'follow', urls: [FEED] }, SHAPE],
+        ['a missing type', { urls: [FEED] }, SHAPE],
         [
-            'an object',
-            { url: FEED },
-            'message must be a JSON array of URL strings'
+            'urls that are not an array',
+            { type: 'subscribe', urls: FEED },
+            'urls must be an array of URL strings'
         ],
         [
-            'a non-string entry',
-            [FEED, 42],
-            'message must be a JSON array of URL strings'
+            'a non-string url',
+            { type: 'subscribe', urls: [FEED, 42] },
+            'urls must be an array of URL strings'
         ]
     ])('rejects %s with an error message', async (_label, payload, message) => {
         const { connect } = await start();
@@ -64,11 +77,13 @@ describe('websocket protocol', () => {
     it('enforces MAX_FEEDS_PER_MESSAGE', async () => {
         const { net, connect } = await start({ MAX_FEEDS_PER_MESSAGE: '2' });
         const client = await connect();
-        client.send([
-            'https://a.example/',
-            'https://b.example/',
-            'https://c.example/'
-        ]);
+        client.send(
+            subscribe(
+                'https://a.example/',
+                'https://b.example/',
+                'https://c.example/'
+            )
+        );
         expect(await client.waitFor(m => m.length >= 1)).toEqual([
             { type: 'error', message: 'too many feeds in one message (3 > 2)' }
         ]);
@@ -83,7 +98,7 @@ describe('websocket protocol', () => {
                 once: true
             })
         );
-        client.send(JSON.stringify(['x'.repeat(1024 * 1024)]));
+        client.send(JSON.stringify(subscribe('x'.repeat(1024 * 1024))));
         expect(await closed).toBe(1009);
         expect(client.messages).toEqual([]);
     });
@@ -94,8 +109,8 @@ describe('websocket protocol', () => {
         fakeCloud(env, 'http://rpc.rsscloud.example:5337/pleaseNotify');
         const a = await env.connect();
         const b = await env.connect();
-        a.send([FEED]);
-        b.send(['https://blog.example/feed.xml#b']);
+        a.send(subscribe(FEED));
+        b.send(subscribe('https://blog.example/feed.xml#b'));
         const subscribed = (m: ServerMessage[]) =>
             m.some(x => x.type === 'status' && x.state === 'subscribed');
         await a.waitFor(subscribed);
@@ -118,13 +133,60 @@ describe('websocket protocol', () => {
         const { net, connect } = await start();
         net.feed(FEED, fixture('none.xml'));
         const first = await connect();
-        first.send([FEED]);
+        first.send(subscribe(FEED));
         await first.waitFor(m => m.length >= 2);
         await first.close();
 
         const second = await connect();
-        second.send([FEED]);
+        second.send(subscribe(FEED));
         await second.waitFor(m => m.length >= 2);
         expect(net.to(FEED)).toHaveLength(2);
+    });
+
+    it('stops updates for an unsubscribed feed but keeps them for other sockets', async () => {
+        const env = await start();
+        env.net.feed(FEED, fixture('rss-cloud.xml'));
+        fakeCloud(env, 'http://rpc.rsscloud.example:5337/pleaseNotify');
+        const a = await env.connect();
+        const b = await env.connect();
+        a.send(subscribe(FEED));
+        b.send(subscribe(FEED));
+        const subscribed = (m: ServerMessage[]) =>
+            m.some(x => x.type === 'status' && x.state === 'subscribed');
+        await a.waitFor(subscribed);
+        await b.waitFor(subscribed);
+
+        a.send(unsubscribe(FEED));
+        await a.waitFor(m =>
+            m.some(x => x.type === 'status' && x.state === 'unsubscribed')
+        );
+        expect(a.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'unsubscribed'
+        });
+
+        await env.app.request('/rsscloud/notify', {
+            method: 'POST',
+            body: new URLSearchParams({ url: FEED })
+        });
+        await b.waitFor(m => m.some(x => x.type === 'update'));
+        expect(a.messages.some(x => x.type === 'update')).toBe(false);
+    });
+
+    it('acknowledges unsubscribing from a feed it never followed', async () => {
+        const { net, connect } = await start();
+        const client = await connect();
+        client.send(unsubscribe(FEED, 'not a url'));
+        expect(await client.waitFor(m => m.length >= 2)).toEqual([
+            { type: 'status', url: FEED, state: 'unsubscribed' },
+            {
+                type: 'status',
+                url: 'not a url',
+                state: 'error',
+                detail: 'not a valid http(s) URL'
+            }
+        ]);
+        expect(net.requests).toHaveLength(0);
     });
 });

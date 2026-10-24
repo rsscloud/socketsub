@@ -46,14 +46,17 @@
         </p>
         <p>WebSocket URL: <code>{{wsUrl}}</code></p>
         <p>
-            To try it, paste a JSON array of feed URLs into the box below and
-            press Send. Each send adds to the feeds this page follows.
+            To try it, paste a subscribe message like this one into the box
+            below and press Send. Each subscribe adds to the feeds this page
+            follows. Send <code>"type": "unsubscribe"</code> to stop following
+            feeds.
         </p>
-        <pre>["http://scripting.com/rss.xml"]</pre>
+        <pre>
+{"type": "subscribe", "urls": ["http://scripting.com/rss.xml"]}</pre>
 
         <p>
             If the connection drops, the viewer reconnects on its own, but the
-            new connection follows no feeds. Send the list again.
+            new connection follows no feeds. Subscribe again.
         </p>
 
         <div class="log-panel">

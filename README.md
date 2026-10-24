@@ -19,35 +19,41 @@ memory only.
 
 ## WebSocket protocol
 
-Connect to `/ws` and send a JSON array of feed URLs as a text message:
+Connect to `/ws` and send JSON text messages. Each has a `type` and a `urls`
+array:
 
 ```json
-["https://example.com/feed.xml", "https://blog.example/atom"]
+{ "type": "subscribe", "urls": ["https://example.com/feed.xml", "https://blog.example/atom"] }
+{ "type": "unsubscribe", "urls": ["https://example.com/feed.xml"] }
 ```
 
-Each array adds to the feeds already watched on that connection. Sending a URL
-again is harmless. A message larger than 1 MiB closes the connection with code 1009.
+Each subscribe adds to the feeds watched on that connection. Subscribing to a
+URL again is harmless. Unsubscribing answers each URL with a `status` of
+`unsubscribed`, even one the connection never followed. Closing the connection
+unsubscribes from everything. A message larger than 1 MiB closes the connection
+with code 1009. The full client protocol is also served at `/docs`.
 
 The server sends three kinds of JSON messages. `url` is always the exact string
 the client sent, even after redirects.
 
 ```jsonc
-// Once per feed, and again whenever the feed's state changes.
+// Once per subscribed feed, again whenever its state changes, and once per
+// unsubscribed URL.
 { "type": "status", "url": "https://example.com/feed.xml",
-  "state": "pending" | "subscribed" | "unsupported" | "error",
+  "state": "pending" | "subscribed" | "unsupported" | "error" | "unsubscribed",
   "via": "rsscloud" | "websub",   // present once a protocol is chosen
   "detail": "rssCloud registration failed: ..." }   // present when there is a reason
 
 // Each time the feed changes.
 { "type": "update", "url": "https://example.com/feed.xml" }
 
-// The message itself was rejected: not JSON, not an array of strings,
-// or more than MAX_FEEDS_PER_MESSAGE entries.
+// The message itself was rejected: not JSON, no valid type, urls not an
+// array of strings, or more than MAX_FEEDS_PER_MESSAGE entries.
 { "type": "error", "message": "message is not valid JSON" }
 ```
 
-An invalid URL inside a valid array gets a `status` of `error`, as does a new
-URL past `MAX_FEEDS_PER_CLIENT` or `MAX_FEEDS`. The rest of the array is still
+An invalid URL inside a valid message gets a `status` of `error`, as does a new
+URL past `MAX_FEEDS_PER_CLIENT` or `MAX_FEEDS`. The rest of the message is still
 processed.
 
 ## Configuration
