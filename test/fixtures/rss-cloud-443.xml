@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <title>Cloud feed on 443</title>
+        <cloud domain="rpc.rsscloud.example" port="443" path="pleaseNotify" registerProcedure="" protocol="http-post"/>
+    </channel>
+</rss>

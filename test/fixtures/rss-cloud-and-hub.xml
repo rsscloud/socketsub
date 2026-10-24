@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+    <channel>
+        <title>Cloud and hub</title>
+        <cloud domain="rpc.rsscloud.example" port="5337" path="/pleaseNotify" registerProcedure="" protocol="http-post"/>
+        <atom:link rel="hub" href="https://hub.example/"/>
+        <atom:link rel="self" href="https://blog.example/feed.xml"/>
+    </channel>
+</rss>

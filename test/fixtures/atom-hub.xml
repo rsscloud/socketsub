@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <title>Atom with hub</title>
+    <link rel="alternate" href="https://blog.example/"/>
+    <link rel="hub" href="https://hub.example/"/>
+    <link rel="self" href="https://blog.example/atom.xml"/>
+    <entry><title>One</title></entry>
+</feed>

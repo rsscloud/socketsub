@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:source="http://source.scripting.com">
+    <channel>
+        <title>Source cloud over http namespace</title>
+        <source:cloud>http://rpc.rsscloud.example/pleaseNotify</source:cloud>
+    </channel>
+</rss>

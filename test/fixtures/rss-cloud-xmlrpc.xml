@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <title>XML-RPC cloud</title>
+        <cloud domain="rpc.rsscloud.example" port="80" path="/RPC2" registerProcedure="rssCloud.pleaseNotify" protocol="xml-rpc"/>
+    </channel>
+</rss>

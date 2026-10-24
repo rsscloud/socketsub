@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:source="https://source.scripting.com/">
+    <channel>
+        <title>Both cloud elements</title>
+        <cloud domain="old.rsscloud.example" port="80" path="/pleaseNotify" registerProcedure="" protocol="http-post"/>
+        <source:cloud>https://new.rsscloud.example/pleaseNotify</source:cloud>
+    </channel>
+</rss>

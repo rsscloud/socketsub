@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <title>Plain feed</title>
+        <link>https://blog.example/</link>
+        <item><title>One</title></item>
+    </channel>
+</rss>

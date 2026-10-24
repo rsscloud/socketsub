@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<rss version="2.0">
+    <channel>
+        <title>Cloud feed</title>
+        <link>https://blog.example/</link>
+        <cloud domain="rpc.rsscloud.example" port="5337" path="/pleaseNotify" registerProcedure="" protocol="http-post"/>
+        <item><title>One</title></item>
+    </channel>
+</rss>

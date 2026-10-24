@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+    <channel>
+        <title>RSS with atom:link hub</title>
+        <link>https://blog.example/</link>
+        <atom:link rel="hub" href="https://hub.example/"/>
+        <atom:link rel="self" type="application/rss+xml" href="/canonical.xml"/>
+    </channel>
+</rss>
