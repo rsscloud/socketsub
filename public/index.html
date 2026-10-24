@@ -33,13 +33,7 @@
             .log-panel {
                 display: flex;
                 flex-direction: column;
-                height: 32rem;
                 gap: 0.5rem;
-            }
-            socklog-viewer {
-                flex: 1;
-                min-height: 0;
-                overflow-y: auto;
             }
         </style>
     </head>
@@ -57,15 +51,16 @@
         </p>
         <pre>["http://scripting.com/rss.xml"]</pre>
 
+        <p>
+            If the connection drops, the viewer reconnects on its own, but the
+            new connection follows no feeds. Send the list again.
+        </p>
+
         <div class="log-panel">
             <socklog-sender id="sender"></socklog-sender>
             <socklog-controls id="controls"></socklog-controls>
             <socklog-viewer id="viewer" url="{{wsUrl}}"></socklog-viewer>
         </div>
-        <p>
-            If the connection drops, the viewer reconnects on its own, but the
-            new connection follows no feeds. Send the list again.
-        </p>
 
         <script type="module">
             import 'https://esm.sh/@andrewshell/socklog@0.3.0';
