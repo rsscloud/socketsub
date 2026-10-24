@@ -31,14 +31,20 @@ export class CoolingDownError extends Error {
     }
 }
 
-type Streak = { failures: number; until: number; probing: boolean };
+// `mark` is the last request ticket issued when the streak last failed:
+// an outcome from a ticket at or below it started before that failure, so
+// it says nothing new about the origin.
+type Streak = { failures: number; until: number; mark: number; probe?: number };
 
 export function createBackoff(clock: Clock): Backoff {
     const streaks = new Map<string, Streak>();
+    let tickets = 0;
 
     // A streak nobody retried for an hour past its cooldown is stale.
     function isStale(streak: Streak, now: number): boolean {
-        return !streak.probing && now >= streak.until + MAX_COOLDOWN_MS;
+        return (
+            streak.probe === undefined && now >= streak.until + MAX_COOLDOWN_MS
+        );
     }
 
     function current(origin: string, now: number): Streak | undefined {
@@ -56,7 +62,7 @@ export function createBackoff(clock: Clock): Backoff {
         if (!streak) return undefined;
         if (streak.until > now) return streak.until;
         // One request probes a recovering origin; the rest wait for it.
-        return streak.probing ? now + BASE_COOLDOWN_MS : undefined;
+        return streak.probe !== undefined ? now + BASE_COOLDOWN_MS : undefined;
     }
 
     function fail(origin: string, failures: number, retryAfter: number) {
@@ -71,10 +77,28 @@ export function createBackoff(clock: Clock): Backoff {
             MAX_RETRY_AFTER_MS,
             Math.max(computed, retryAfter)
         );
-        streaks.set(origin, { failures, until: now + delay, probing: false });
+        streaks.set(origin, { failures, until: now + delay, mark: tickets });
         for (const [key, streak] of streaks) {
             if (isStale(streak, now)) streaks.delete(key);
         }
+    }
+
+    function finish(origin: string, ticket: number, exchange: Exchange) {
+        const streak = current(origin, clock.now());
+        if (streak?.probe === ticket) delete streak.probe;
+        if (exchange.kind === 'not-sent') return;
+        if (streak && ticket <= streak.mark) return;
+        if (exchange.kind === 'answered' && !isServerTrouble(exchange.status)) {
+            streaks.delete(origin);
+            return;
+        }
+        fail(
+            origin,
+            (streak?.failures ?? 0) + 1,
+            exchange.kind === 'answered'
+                ? retryAfterMs(exchange, clock.now())
+                : 0
+        );
     }
 
     return {
@@ -93,34 +117,10 @@ export function createBackoff(clock: Clock): Backoff {
         begin(origin) {
             const end = cooldownEnd(origin);
             if (end !== undefined) throw new CoolingDownError(origin, end);
+            const ticket = ++tickets;
             const streak = streaks.get(origin);
-            if (streak) streak.probing = true;
-            return {
-                finish(exchange) {
-                    if (exchange.kind === 'not-sent') {
-                        if (streak) streak.probing = false;
-                        return;
-                    }
-                    if (
-                        exchange.kind === 'answered' &&
-                        !isServerTrouble(exchange.status)
-                    ) {
-                        streaks.delete(origin);
-                        return;
-                    }
-                    const latest = streaks.get(origin);
-                    // Requests already in flight when the origin started
-                    // failing count as one failure, not one each.
-                    if (latest && latest !== streak) return;
-                    fail(
-                        origin,
-                        (latest?.failures ?? 0) + 1,
-                        exchange.kind === 'answered'
-                            ? retryAfterMs(exchange, clock.now())
-                            : 0
-                    );
-                }
-            };
+            if (streak) streak.probe = ticket;
+            return { finish: exchange => finish(origin, ticket, exchange) };
         }
     };
 }

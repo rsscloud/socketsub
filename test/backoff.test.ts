@@ -192,6 +192,31 @@ describe('origin backoff', () => {
         expect((await r.get(URL_B)).body).toBe('ok');
     });
 
+    it('ignores a success from a request that started before the origin failed', async () => {
+        const r = rig();
+        const stray = gate();
+        r.net.on(URL_B, async () => {
+            await stray.wait();
+            return new Response('ok');
+        });
+        const late = r.get(URL_B);
+        r.respond(503);
+        await r.get(URL_A);
+        r.waitOut();
+        const probing = gate();
+        r.net.on(URL_A, async () => {
+            await probing.wait();
+            return new Response(null, { status: 503 });
+        });
+        const probe = r.get(URL_A);
+        stray.release();
+        await late;
+        await expect(r.get(URL_B)).rejects.toBeInstanceOf(CoolingDownError);
+        probing.release();
+        await probe;
+        expect(r.cooldown()).toBe(2 * MINUTE);
+    });
+
     it('forgets a streak an hour after its cooldown ends', async () => {
         const r = rig();
         r.respond(503);
