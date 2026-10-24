@@ -9,6 +9,8 @@ describe('loadConfig', () => {
             rsscloudRenewMs: 24 * 3600_000,
             websubLeaseSeconds: 86400,
             maxFeedsPerMessage: 500,
+            maxFeedsPerClient: 1000,
+            maxFeeds: 10000,
             fetchTimeoutMs: 10000,
             discoveryConcurrency: 8,
             allowPrivateHosts: false

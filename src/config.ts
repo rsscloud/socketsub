@@ -11,6 +11,8 @@ export type Config = {
     rsscloudRenewMs: number;
     websubLeaseSeconds: number;
     maxFeedsPerMessage: number;
+    maxFeedsPerClient: number;
+    maxFeeds: number;
     fetchTimeoutMs: number;
     discoveryConcurrency: number;
     allowPrivateHosts: boolean;
@@ -34,6 +36,8 @@ export function loadConfig(env: Env): Config {
             ) * 3600_000,
         websubLeaseSeconds: positiveInt(env, 'WEBSUB_LEASE_SECONDS', 86400),
         maxFeedsPerMessage: positiveInt(env, 'MAX_FEEDS_PER_MESSAGE', 500),
+        maxFeedsPerClient: positiveInt(env, 'MAX_FEEDS_PER_CLIENT', 1000),
+        maxFeeds: positiveInt(env, 'MAX_FEEDS', 10000),
         fetchTimeoutMs: positiveInt(
             env,
             'FETCH_TIMEOUT_MS',

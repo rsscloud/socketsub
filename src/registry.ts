@@ -94,6 +94,7 @@ function normalizeUrl(raw: string): string | undefined {
 
 export function createRegistry(deps: RegistryDeps) {
     const feeds = new Map<FeedKey, FeedSub>();
+    const clientFeeds = new Map<Client, Set<FeedKey>>();
     const aliasIndex = new Map<string, Set<FeedKey>>();
     const limit = createLimiter(deps.config.discoveryConcurrency);
     const callback = rsscloudCallback(deps.config);
@@ -384,18 +385,33 @@ export function createRegistry(deps: RegistryDeps) {
 
     return {
         add(client: Client, urls: readonly string[]) {
+            const { maxFeedsPerClient, maxFeeds } = deps.config;
+            let followed = clientFeeds.get(client);
+            if (!followed) clientFeeds.set(client, (followed = new Set()));
+            const reject = (url: string, detail: string) =>
+                client.send({ type: 'status', url, state: 'error', detail });
             for (const url of urls) {
                 const key = toFeedKey(url);
                 if (key === undefined) {
-                    client.send({
-                        type: 'status',
-                        url,
-                        state: 'error',
-                        detail: 'not a valid http(s) URL'
-                    });
+                    reject(url, 'not a valid http(s) URL');
                     continue;
                 }
                 const existing = feeds.get(key);
+                if (!followed.has(key) && followed.size >= maxFeedsPerClient) {
+                    reject(
+                        url,
+                        `this connection already follows the maximum of ${maxFeedsPerClient} feeds`
+                    );
+                    continue;
+                }
+                if (!existing && feeds.size >= maxFeeds) {
+                    reject(
+                        url,
+                        `the server already follows the maximum of ${maxFeeds} feeds`
+                    );
+                    continue;
+                }
+                followed.add(key);
                 if (existing) {
                     existing.clients.set(client, url);
                     client.send(statusMessage(url, existing.state));
@@ -415,11 +431,13 @@ export function createRegistry(deps: RegistryDeps) {
         },
 
         removeClient(client: Client) {
-            for (const feed of [...feeds.values()]) {
-                if (feed.clients.delete(client) && feed.clients.size === 0) {
+            for (const key of clientFeeds.get(client) ?? []) {
+                const feed = feeds.get(key);
+                if (feed?.clients.delete(client) && feed.clients.size === 0) {
                     drop(feed);
                 }
             }
+            clientFeeds.delete(client);
         },
 
         acceptsRssCloudChallenge(url: string): boolean {

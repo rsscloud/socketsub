@@ -157,6 +157,69 @@ describe('registry', () => {
         ]);
     });
 
+    it('caps the feeds one client can follow at MAX_FEEDS_PER_CLIENT', async () => {
+        const { net, registry } = setup({ MAX_FEEDS_PER_CLIENT: '2' });
+        const [a, b, c] = ['a', 'b', 'c'].map(n => `https://${n}.example/rss`);
+        for (const url of [a, b, c]) net.feed(url!, fixture('none.xml'));
+        const client = recordingClient();
+        registry.add(client, [a!, c!, b!, a!]);
+        await settle();
+        expect(client.messages).toContainEqual({
+            type: 'status',
+            url: b,
+            state: 'error',
+            detail: 'this connection already follows the maximum of 2 feeds'
+        });
+        expect(net.to(b!)).toHaveLength(0);
+        expect(net.to(a!)).toHaveLength(1);
+        expect(net.to(c!)).toHaveLength(1);
+        expect(
+            client.messages.filter(
+                m => m.type === 'status' && m.state === 'error'
+            )
+        ).toHaveLength(1);
+    });
+
+    it('caps the feeds the server follows at MAX_FEEDS', async () => {
+        const { net, registry } = setup({ MAX_FEEDS: '1' });
+        const other = 'https://other.example/rss';
+        net.feed(FEED, fixture('none.xml'));
+        net.feed(other, fixture('none.xml'));
+        registry.add(recordingClient(), [FEED]);
+        await settle();
+        const late = recordingClient();
+        registry.add(late, [other, FEED]);
+        await settle();
+        expect(late.messages).toEqual([
+            {
+                type: 'status',
+                url: other,
+                state: 'error',
+                detail: 'the server already follows the maximum of 1 feeds'
+            },
+            expect.objectContaining({ url: FEED, state: 'unsupported' })
+        ]);
+        expect(net.to(other)).toHaveLength(0);
+    });
+
+    it('frees a client slot when the client leaves', async () => {
+        const { net, registry } = setup({ MAX_FEEDS: '1' });
+        const other = 'https://other.example/rss';
+        net.feed(FEED, fixture('none.xml'));
+        net.feed(other, fixture('none.xml'));
+        const first = recordingClient();
+        registry.add(first, [FEED]);
+        await settle();
+        registry.removeClient(first);
+        const second = recordingClient();
+        registry.add(second, [other]);
+        await settle();
+        expect(second.messages.at(-1)).toMatchObject({
+            url: other,
+            state: 'unsupported'
+        });
+    });
+
     it('limits concurrent discovery', async () => {
         const { net, registry } = setup({ DISCOVERY_CONCURRENCY: '2' });
         let inFlight = 0;
