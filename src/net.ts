@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
+import type { Backoff } from './backoff.js';
 import { isHttpUrl } from './url.js';
 
 export type FetchResult = {
@@ -31,6 +32,7 @@ export type FetcherDeps = {
     lookup: Lookup;
     timeoutMs: number;
     allowPrivateHosts: boolean;
+    backoff: Backoff;
 };
 
 const MAX_REDIRECTS = 5;
@@ -75,17 +77,44 @@ export function isPrivateAddress(address: string): boolean {
     return true;
 }
 
+class RefusedHostError extends Error {}
+
 export function createFetcher(deps: FetcherDeps): Fetcher {
-    async function assertAllowed(url: URL) {
-        if (!isHttpUrl(url)) {
-            throw new Error(`refusing ${url.protocol} URL`);
-        }
+    async function assertPublic(url: URL) {
         if (deps.allowPrivateHosts) return;
         const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
         const addresses = isIP(host) ? [host] : await deps.lookup(host);
         if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
-            throw new Error(`refusing private or unresolvable host ${host}`);
+            throw new RefusedHostError(
+                `refusing private or unresolvable host ${host}`
+            );
         }
+    }
+
+    // The one gate for outbound requests: every hop to a cooling origin is
+    // refused here, and every answer feeds that origin's backoff.
+    async function send(url: URL, init: RequestInit): Promise<Response> {
+        if (!isHttpUrl(url)) {
+            throw new Error(`refusing ${url.protocol} URL`);
+        }
+        const attempt = deps.backoff.begin(url.origin);
+        let res: Response;
+        try {
+            await assertPublic(url);
+            res = await deps.fetch(url, init);
+        } catch (err) {
+            attempt.finish({
+                kind:
+                    err instanceof RefusedHostError ? 'not-sent' : 'unreachable'
+            });
+            throw err;
+        }
+        attempt.finish({
+            kind: 'answered',
+            status: res.status,
+            retryAfter: res.headers.get('retry-after')
+        });
+        return res;
     }
 
     return async (url, request = {}) => {
@@ -98,11 +127,7 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
 
         let current = new URL(url);
         for (let hop = 0; ; hop++) {
-            await assertAllowed(current);
-            const res = await deps.fetch(current, {
-                ...init,
-                redirect: 'manual'
-            });
+            const res = await send(current, { ...init, redirect: 'manual' });
             const location = res.headers.get('location');
             if (!request.form && isRedirect(res.status) && location) {
                 await res.body?.cancel();

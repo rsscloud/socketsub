@@ -1,3 +1,4 @@
+import type { Backoff } from './backoff.js';
 import type { Config } from './config.js';
 import { discover, type Discovery } from './discover.js';
 import { createLimiter } from './limiter.js';
@@ -46,6 +47,8 @@ type FeedSub = {
 export type RegistryDeps = {
     config: Config;
     fetcher: Fetcher;
+    backoff: Backoff;
+    now(): number;
 };
 
 export function toFeedKey(raw: string): FeedKey | undefined {

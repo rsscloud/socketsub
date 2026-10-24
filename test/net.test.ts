@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createBackoff } from '../src/backoff.js';
 import { createFetcher, isPrivateAddress, type Lookup } from '../src/net.js';
 import { createFakeNet, fixture } from './support/fake-net.js';
 import { recordingClient, settle, setup } from './support/harness.js';
@@ -17,7 +18,8 @@ function fetcher(
         fetch: net.fetch,
         lookup: opts.lookup ?? publicDns,
         timeoutMs: opts.timeoutMs ?? 1000,
-        allowPrivateHosts: opts.allowPrivateHosts ?? false
+        allowPrivateHosts: opts.allowPrivateHosts ?? false,
+        backoff: createBackoff({ now: Date.now, random: Math.random })
     });
 }
 
@@ -139,7 +141,8 @@ describe('guarded fetcher', () => {
             fetch: slow,
             lookup: publicDns,
             timeoutMs: 20,
-            allowPrivateHosts: false
+            allowPrivateHosts: false,
+            backoff: createBackoff({ now: Date.now, random: Math.random })
         });
         await expect(get('https://slow.example/')).rejects.toMatchObject({
             name: 'TimeoutError'

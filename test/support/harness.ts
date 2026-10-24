@@ -17,7 +17,9 @@ export function setup(env: Record<string, string> = {}) {
     const created = createApp({
         config,
         fetch: net.fetch,
-        lookup: async () => ['93.184.215.14']
+        lookup: async () => ['93.184.215.14'],
+        now: () => Date.now(),
+        random: () => 0.5
     });
     return { net, config, ...created };
 }

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
+import { createBackoff } from './backoff.js';
 import { callbackUrl, webSocketUrl, type Config } from './config.js';
 import { createFetcher, type Lookup } from './net.js';
 import { createRegistry } from './registry.js';
@@ -14,6 +15,8 @@ export type AppDeps = {
     config: Config;
     fetch: typeof fetch;
     lookup: Lookup;
+    now(): number;
+    random(): number;
 };
 
 function readPage(name: string): string {
@@ -55,13 +58,20 @@ export function createApp(deps: AppDeps) {
     // @hono/node-ws takes no ws options, but ws reads maxPayload from
     // wss.options on each upgrade. Larger messages close with 1009.
     wss.options.maxPayload = MAX_WS_MESSAGE_BYTES;
+    const backoff = createBackoff(deps);
     const fetcher = createFetcher({
         fetch: deps.fetch,
         lookup: deps.lookup,
         timeoutMs: config.fetchTimeoutMs,
-        allowPrivateHosts: config.allowPrivateHosts
+        allowPrivateHosts: config.allowPrivateHosts,
+        backoff
     });
-    const registry = createRegistry({ config, fetcher });
+    const registry = createRegistry({
+        config,
+        fetcher,
+        backoff,
+        now: deps.now
+    });
 
     const homePage = renderPage(homeTemplate, config);
     const docsPage = renderPage(docsTemplate, config);

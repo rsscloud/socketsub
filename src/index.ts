@@ -7,7 +7,9 @@ const config = loadConfig(process.env);
 const { app, injectWebSocket } = createApp({
     config,
     fetch: globalThis.fetch,
-    lookup: systemLookup
+    lookup: systemLookup,
+    now: Date.now,
+    random: Math.random
 });
 
 const server = serve({ fetch: app.fetch, port: config.port }, info => {

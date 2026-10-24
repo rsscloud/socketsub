@@ -6,7 +6,9 @@ function appFor(env: Record<string, string>) {
     return createApp({
         config: loadConfig(env),
         fetch: () => Promise.reject(new Error('no network')),
-        lookup: () => Promise.reject(new Error('no dns'))
+        lookup: () => Promise.reject(new Error('no dns')),
+        now: Date.now,
+        random: Math.random
     }).app;
 }
 
