@@ -97,3 +97,45 @@ export class WsClient {
         await closed;
     }
 }
+
+export type Setup = ReturnType<typeof setup>;
+
+type CloudOptions = {
+    format?: 'json' | 'xml';
+    refuse?: string;
+};
+
+export function fakeCloud(
+    env: Setup,
+    endpoint: string,
+    opts: CloudOptions = {}
+) {
+    const challenges: { status: number; body: string }[] = [];
+    env.net.on(endpoint, async request => {
+        let success = false;
+        let msg = opts.refuse ?? '';
+        if (opts.refuse === undefined) {
+            const query = new URLSearchParams({
+                url: request.form.get('url1') ?? '',
+                challenge: 'c-123'
+            });
+            const res = await env.app.request(
+                `${request.form.get('path')}?${query}`
+            );
+            const body = await res.text();
+            challenges.push({ status: res.status, body });
+            success = res.status === 200 && body === 'c-123';
+            msg = success
+                ? 'Thanks for the registration.'
+                : 'The subscription was cancelled because the call failed when we tested the handler.';
+        }
+        if (opts.format === 'xml') {
+            return new Response(
+                `<?xml version="1.0"?>\n<notifyResult success="${success}" msg="${msg}"/>`,
+                { headers: { 'content-type': 'text/xml' } }
+            );
+        }
+        return Response.json({ success, msg });
+    });
+    return { requests: () => env.net.to(endpoint), challenges };
+}

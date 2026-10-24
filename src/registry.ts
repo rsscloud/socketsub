@@ -1,6 +1,7 @@
-import type { Config } from './config.js';
+import { rsscloudCallback, type Config } from './config.js';
 import { discover, type Discovery } from './discover.js';
 import type { Fetcher } from './net.js';
+import { pleaseNotify, type NotifyResult } from './rsscloud.js';
 
 export type Via = 'rsscloud' | 'websub';
 
@@ -21,8 +22,19 @@ export type Client = { send(message: ServerMessage): void };
 
 export type FeedKey = string & { __brand: 'FeedKey' };
 
+type Timer = ReturnType<typeof setTimeout>;
+
+type RssCloudTarget = { endpoint: URL; topic: string };
+
 export type FeedState =
     | { kind: 'discovering' }
+    | { kind: 'subscribing'; via: 'rsscloud'; target: RssCloudTarget }
+    | {
+          kind: 'active';
+          via: 'rsscloud';
+          target: RssCloudTarget;
+          renewTimer: Timer;
+      }
     | { kind: 'unsupported'; detail: string }
     | { kind: 'failed'; reason: string; via?: Via };
 
@@ -61,6 +73,7 @@ export function createRegistry(deps: RegistryDeps) {
     const feeds = new Map<FeedKey, FeedSub>();
     const aliasIndex = new Map<string, Set<FeedKey>>();
     const limit = createLimiter(deps.config.discoveryConcurrency);
+    const callback = rsscloudCallback(deps.config);
 
     function isLive(feed: FeedSub): boolean {
         return feeds.get(feed.key) === feed;
@@ -76,6 +89,7 @@ export function createRegistry(deps: RegistryDeps) {
     }
 
     function drop(feed: FeedSub) {
+        if (feed.state.kind === 'active') clearTimeout(feed.state.renewTimer);
         feeds.delete(feed.key);
         for (const alias of feed.aliases) {
             const keys = aliasIndex.get(alias);
@@ -107,10 +121,77 @@ export function createRegistry(deps: RegistryDeps) {
         }
         if (!discovery || !isLive(feed)) return;
         addAlias(feed, discovery.finalUrl);
+
+        if (discovery.rsscloud) {
+            const target = {
+                endpoint: discovery.rsscloud.endpoint,
+                topic: discovery.finalUrl
+            };
+            // The cloud may call our challenge route before pleaseNotify
+            // returns, so the feed must already be in a subscribing state.
+            setState(feed, { kind: 'subscribing', via: 'rsscloud', target });
+            const result = await registerRssCloud(target);
+            if (!isLive(feed)) return;
+            if (result.success) {
+                setState(feed, {
+                    kind: 'active',
+                    via: 'rsscloud',
+                    target,
+                    renewTimer: scheduleRssCloudRenewal(feed, target)
+                });
+                return;
+            }
+            setState(feed, {
+                kind: 'failed',
+                via: 'rsscloud',
+                reason: `rssCloud registration failed: ${result.msg}`
+            });
+            return;
+        }
+
         setState(feed, {
             kind: 'unsupported',
             detail: 'feed advertises neither rssCloud nor WebSub'
         });
+    }
+
+    async function registerRssCloud(
+        target: RssCloudTarget
+    ): Promise<NotifyResult> {
+        try {
+            return await pleaseNotify(
+                deps.fetcher,
+                target.endpoint,
+                callback,
+                target.topic
+            );
+        } catch (err) {
+            return { success: false, msg: errorText(err) };
+        }
+    }
+
+    function scheduleRssCloudRenewal(
+        feed: FeedSub,
+        target: RssCloudTarget
+    ): Timer {
+        return setTimeout(async () => {
+            const result = await registerRssCloud(target);
+            if (!isLive(feed)) return;
+            if (result.success) {
+                feed.state = {
+                    kind: 'active',
+                    via: 'rsscloud',
+                    target,
+                    renewTimer: scheduleRssCloudRenewal(feed, target)
+                };
+                return;
+            }
+            setState(feed, {
+                kind: 'failed',
+                via: 'rsscloud',
+                reason: `rssCloud renewal failed: ${result.msg}`
+            });
+        }, deps.config.rsscloudRenewMs);
     }
 
     return {
@@ -153,6 +234,20 @@ export function createRegistry(deps: RegistryDeps) {
             }
         },
 
+        acceptsRssCloudChallenge(url: string): boolean {
+            const alias = normalizeUrl(url);
+            const keys =
+                alias === undefined ? undefined : aliasIndex.get(alias);
+            return [...(keys ?? [])].some(key => {
+                const state = feeds.get(key)?.state;
+                return (
+                    (state?.kind === 'subscribing' ||
+                        state?.kind === 'active') &&
+                    state.via === 'rsscloud'
+                );
+            });
+        },
+
         notify(url: string): boolean {
             const alias = normalizeUrl(url);
             const keys =
@@ -176,6 +271,10 @@ function statusMessage(url: string, state: FeedState): StatusMessage {
     switch (state.kind) {
         case 'discovering':
             return { type: 'status', url, state: 'pending' };
+        case 'subscribing':
+            return { type: 'status', url, state: 'pending', via: state.via };
+        case 'active':
+            return { type: 'status', url, state: 'subscribed', via: state.via };
         case 'unsupported':
             return {
                 type: 'status',

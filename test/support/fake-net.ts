@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 export type Recorded = {
     method: string;
     url: URL;
+    headers: Headers;
     form: URLSearchParams;
 };
 
@@ -26,6 +27,7 @@ export function createFakeNet() {
         const recorded = {
             method: request.method,
             url,
+            headers: request.headers,
             form: new URLSearchParams(text)
         };
         requests.push(recorded);
