@@ -321,6 +321,57 @@ describe('WebSub renewal', () => {
         expect(hub.subscribes()).toHaveLength(3);
     });
 
+    it('fails at the end of the lease when the hub never verifies a renewal', async () => {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        const client = recordingClient();
+        s.registry.add(client, [FEED]);
+        await settle();
+        const request = hub.subscribes()[0];
+        await hub.verify(request, { 'hub.lease_seconds': '1000' });
+
+        await vi.advanceTimersByTimeAsync(900_000);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(99_999);
+        expect(client.messages.at(-1)).toMatchObject({ state: 'subscribed' });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(client.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'error',
+            via: 'websub',
+            detail: 'WebSub hub did not verify the renewal before the lease ended'
+        });
+        const delivery = await hub.deliver(request, '<feed/>', sign('sha256'));
+        expect(delivery.status).toBe(410);
+    });
+
+    it('stays subscribed when the hub verifies a renewal before the request returns', async () => {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        s.net.on(HUB, async request => {
+            if (hub.subscribes().length > 1) {
+                await hub.verify(request, { 'hub.lease_seconds': '1000' });
+            }
+            return new Response(null, { status: 202 });
+        });
+        const client = recordingClient();
+        s.registry.add(client, [FEED]);
+        await settle();
+        await hub.verify(hub.subscribes()[0], { 'hub.lease_seconds': '1000' });
+
+        await vi.advanceTimersByTimeAsync(900_000);
+        await settle();
+        await vi.advanceTimersByTimeAsync(899_999);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(2);
+        expect(client.messages.at(-1)).toMatchObject({ state: 'subscribed' });
+        await vi.advanceTimersByTimeAsync(1);
+        await settle();
+        expect(hub.subscribes()).toHaveLength(3);
+    });
+
     it('waits the longest timer delay when the hub grants a huge lease', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);

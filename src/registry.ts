@@ -286,17 +286,35 @@ export function createRegistry(deps: RegistryDeps) {
         target: WebSubTarget,
         leaseSeconds: number
     ): Timer {
-        const delayMs = Math.max(60, Math.floor(leaseSeconds * 0.9)) * 1000;
-        return schedule(async () => {
-            const result = await requestHub(target, 'subscribe');
-            if (result.ok || !webSubFeed(target.id)) return;
+        const renewSeconds = Math.max(60, Math.floor(leaseSeconds * 0.9));
+        const graceSeconds = Math.max(60, leaseSeconds - renewSeconds);
+        const fail = (reason: string) => {
             websubFeeds.delete(target.id);
+            setState(feed, { kind: 'failed', via: 'websub', reason });
+        };
+        return schedule(async () => {
+            const before = feed.state;
+            const result = await requestHub(target, 'subscribe');
+            if (!webSubFeed(target.id)) return;
+            if (!result.ok) {
+                fail(`WebSub renewal failed: ${result.detail}`);
+                return;
+            }
+            // A verification that already arrived armed the next renewal.
+            if (feed.state !== before) return;
             setState(feed, {
-                kind: 'failed',
+                kind: 'active',
                 via: 'websub',
-                reason: `WebSub renewal failed: ${result.detail}`
+                target,
+                renewTimer: schedule(
+                    () =>
+                        fail(
+                            'WebSub hub did not verify the renewal before the lease ended'
+                        ),
+                    graceSeconds * 1000
+                )
             });
-        }, delayMs);
+        }, renewSeconds * 1000);
     }
 
     async function registerRssCloud(
