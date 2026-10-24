@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>socketsub docs</title>
+        <style>
+            :root {
+                color-scheme: light dark;
+                font-family: system-ui, sans-serif;
+                line-height: 1.5;
+            }
+            body {
+                max-width: 48rem;
+                margin: 2rem auto;
+                padding: 0 1rem;
+            }
+            nav {
+                display: flex;
+                gap: 1rem;
+            }
+            code,
+            pre {
+                font-family: ui-monospace, monospace;
+                font-size: 0.9rem;
+            }
+            pre {
+                padding: 0.75rem;
+                overflow-x: auto;
+                background: #8881;
+                border-radius: 4px;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+            }
+            th,
+            td {
+                text-align: left;
+                vertical-align: top;
+                padding: 0.4rem 0.6rem;
+                border-bottom: 1px solid #8884;
+            }
+        </style>
+    </head>
+    <body>
+        <nav><a href="{{homePath}}">socketsub</a><strong>Docs</strong></nav>
+        <h1>Client protocol</h1>
+        <p>
+            socketsub watches RSS and Atom feeds for you. You open a WebSocket,
+            send the feed URLs you care about, and receive a message each time
+            one of them changes. socketsub finds each feed's rssCloud or WebSub
+            support and handles the subscriptions.
+        </p>
+
+        <h2>Connect</h2>
+        <p>Open a WebSocket to:</p>
+        <pre>{{wsUrl}}</pre>
+        <p>
+            All messages in both directions are JSON text frames. Feeds belong
+            to the connection: when it closes, socketsub forgets them. After a
+            reconnect, subscribe to your feeds again.
+        </p>
+
+        <h2>Send messages</h2>
+        <p>
+            Every message you send is a JSON object with a <code>type</code> and
+            a <code>urls</code> array of feed URL strings.
+        </p>
+
+        <h3><code>subscribe</code></h3>
+        <pre>
+{
+  "type": "subscribe",
+  "urls": ["https://example.com/feed.xml", "https://blog.example/atom"]
+}</pre>
+        <ul>
+            <li>
+                Each subscribe adds to the feeds this connection already
+                follows. Subscribing to a URL again is harmless.
+            </li>
+            <li>
+                Use the feed's URL, not the URL of a web page. Only
+                <code>http</code> and <code>https</code> URLs are accepted.
+            </li>
+        </ul>
+
+        <h3><code>unsubscribe</code></h3>
+        <pre>
+{
+  "type": "unsubscribe",
+  "urls": ["https://example.com/feed.xml"]
+}</pre>
+        <ul>
+            <li>
+                Each URL gets a <code>status</code> with state
+                <code>unsubscribed</code>, even if this connection never
+                followed it.
+            </li>
+            <li>Closing the connection unsubscribes from everything.</li>
+        </ul>
+
+        <h2>Receive messages</h2>
+        <p>
+            The server sends three kinds of message. Every <code>url</code>
+            field is the exact string you sent, even if the feed redirects or
+            has a different canonical URL, so you can use it as a key.
+        </p>
+
+        <h3><code>status</code></h3>
+        <p>
+            Sent once for each URL you subscribe to, again each time that feed's
+            state changes, and once for each URL you unsubscribe from.
+        </p>
+        <pre>
+{
+  "type": "status",
+  "url": "https://example.com/feed.xml",
+  "state": "subscribed",
+  "via": "rsscloud"
+}</pre>
+        <table>
+            <thead>
+                <tr>
+                    <th>Field</th>
+                    <th>Meaning</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>state</code></td>
+                    <td>One of the states in the next table.</td>
+                </tr>
+                <tr>
+                    <td><code>via</code></td>
+                    <td>
+                        <code>rsscloud</code> or <code>websub</code>. Present
+                        once socketsub has picked a protocol for the feed.
+                    </td>
+                </tr>
+                <tr>
+                    <td><code>detail</code></td>
+                    <td>
+                        A human-readable reason. Present on
+                        <code>error</code> and <code>unsupported</code>, and on
+                        <code>pending</code> when rssCloud failed and WebSub is
+                        being tried.
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <p>States:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>State</th>
+                    <th>Meaning</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>pending</code></td>
+                    <td>
+                        socketsub is fetching the feed or waiting for the
+                        rssCloud server or WebSub hub to confirm.
+                    </td>
+                </tr>
+                <tr>
+                    <td><code>subscribed</code></td>
+                    <td>
+                        You will get <code>update</code> messages for this feed.
+                    </td>
+                </tr>
+                <tr>
+                    <td><code>unsupported</code></td>
+                    <td>
+                        The feed advertises neither rssCloud nor WebSub. You
+                        will not get updates for it.
+                    </td>
+                </tr>
+                <tr>
+                    <td><code>error</code></td>
+                    <td>
+                        The URL was invalid, a limit was reached, the feed could
+                        not be fetched, or the subscription failed. See
+                        <code>detail</code>. You will not get updates for it.
+                    </td>
+                </tr>
+                <tr>
+                    <td><code>unsubscribed</code></td>
+                    <td>
+                        Your unsubscribe went through. You will not get updates
+                        for it.
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3><code>update</code></h3>
+        <p>
+            Sent each time the feed's publisher reports a change. Fetch the feed
+            yourself to get the new content.
+        </p>
+        <pre>{ "type": "update", "url": "https://example.com/feed.xml" }</pre>
+
+        <h3><code>error</code></h3>
+        <p>
+            Sent when a whole message is rejected: it is not JSON, has no valid
+            <code>type</code>, its <code>urls</code> is not an array of strings,
+            or it has too many URLs. Problems with a single URL come back as a
+            <code>status</code> with state <code>error</code>
+            instead.
+        </p>
+        <pre>{ "type": "error", "message": "message is not valid JSON" }</pre>
+
+        <h2>Example session</h2>
+        <pre>
+&gt; {"type":"subscribe","urls":["http://scripting.com/rss.xml","https://xkcd.com/rss.xml"]}
+&lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"pending"}
+&lt; {"type":"status","url":"https://xkcd.com/rss.xml","state":"pending"}
+&lt; {"type":"status","url":"https://xkcd.com/rss.xml","state":"unsupported","detail":"feed advertises neither rssCloud nor WebSub"}
+&lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"pending","via":"rsscloud"}
+&lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"subscribed","via":"rsscloud"}
+...
+&lt; {"type":"update","url":"http://scripting.com/rss.xml"}
+&gt; {"type":"unsubscribe","urls":["http://scripting.com/rss.xml"]}
+&lt; {"type":"status","url":"http://scripting.com/rss.xml","state":"unsubscribed"}</pre>
+
+        <h2>Example client</h2>
+        <pre>
+const feeds = ['http://scripting.com/rss.xml'];
+const socket = new WebSocket('{{wsUrl}}');
+
+socket.addEventListener('open', () =&gt; {
+    socket.send(JSON.stringify({ type: 'subscribe', urls: feeds }));
+});
+
+socket.addEventListener('message', event =&gt; {
+    const message = JSON.parse(event.data);
+    if (message.type === 'update') {
+        console.log('changed:', message.url);
+    } else if (message.type === 'status') {
+        console.log(message.url, message.state, message.detail ?? '');
+    } else {
+        console.error(message.message);
+    }
+});</pre>
+
+        <h2>Limits</h2>
+        <table>
+            <tbody>
+                <tr>
+                    <td>URLs in one message</td>
+                    <td>{{maxFeedsPerMessage}}</td>
+                </tr>
+                <tr>
+                    <td>Feeds per connection</td>
+                    <td>{{maxFeedsPerClient}}</td>
+                </tr>
+                <tr>
+                    <td>Feeds across the server</td>
+                    <td>{{maxFeeds}}</td>
+                </tr>
+                <tr>
+                    <td>Message size</td>
+                    <td>
+                        1 MiB. Larger messages close the connection with code
+                        1009.
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <p>Feeds on private or loopback addresses are refused.</p>
+    </body>
+</html>

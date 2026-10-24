@@ -1,16 +1,16 @@
 import type { UpgradeWebSocket } from 'hono/ws';
-import type { Client } from './messages.js';
+import type { Client, ClientMessage } from './messages.js';
 import type { Registry } from './registry.js';
 
 type ParsedMessage =
-    { ok: true; urls: string[] } | { ok: false; message: string };
+    { ok: true; message: ClientMessage } | { ok: false; message: string };
+
+const SHAPE =
+    'message must be {"type": "subscribe" | "unsubscribe", "urls": [...]}';
 
 export function parseClientMessage(data: unknown, max: number): ParsedMessage {
     if (typeof data !== 'string') {
-        return {
-            ok: false,
-            message: 'send a JSON array of URL strings as text'
-        };
+        return { ok: false, message: 'send a JSON object as text' };
     }
     let value: unknown;
     try {
@@ -18,19 +18,23 @@ export function parseClientMessage(data: unknown, max: number): ParsedMessage {
     } catch {
         return { ok: false, message: 'message is not valid JSON' };
     }
-    if (!Array.isArray(value) || !value.every(v => typeof v === 'string')) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return { ok: false, message: SHAPE };
+    }
+    const { type, urls } = value as Record<string, unknown>;
+    if (type !== 'subscribe' && type !== 'unsubscribe') {
+        return { ok: false, message: SHAPE };
+    }
+    if (!Array.isArray(urls) || !urls.every(v => typeof v === 'string')) {
+        return { ok: false, message: 'urls must be an array of URL strings' };
+    }
+    if (urls.length > max) {
         return {
             ok: false,
-            message: 'message must be a JSON array of URL strings'
+            message: `too many feeds in one message (${urls.length} > ${max})`
         };
     }
-    if (value.length > max) {
-        return {
-            ok: false,
-            message: `too many feeds in one message (${value.length} > ${max})`
-        };
-    }
-    return { ok: true, urls: value };
+    return { ok: true, message: { type, urls } };
 }
 
 export function wsHandler(
@@ -56,10 +60,12 @@ export function wsHandler(
                     event.data,
                     maxFeedsPerMessage
                 );
-                if (parsed.ok) {
-                    registry.add(client, parsed.urls);
-                } else {
+                if (!parsed.ok) {
                     client.send({ type: 'error', message: parsed.message });
+                } else if (parsed.message.type === 'subscribe') {
+                    registry.subscribe(client, parsed.message.urls);
+                } else {
+                    registry.unsubscribe(client, parsed.message.urls);
                 }
             },
             onClose() {

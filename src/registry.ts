@@ -113,6 +113,13 @@ export function createRegistry(deps: RegistryDeps) {
         }
     }
 
+    function leave(client: Client, key: FeedKey) {
+        const feed = feeds.get(key);
+        if (feed?.clients.delete(client) && feed.clients.size === 0) {
+            drop(feed);
+        }
+    }
+
     function transition(feed: FeedSub, state: FeedState) {
         const previous = feed.state;
         cancelTimer(previous);
@@ -224,7 +231,7 @@ export function createRegistry(deps: RegistryDeps) {
     const webSub: WebSubCallbacks = webSubSubscriber.callbacks;
 
     return {
-        add(client: Client, urls: readonly string[]) {
+        subscribe(client: Client, urls: readonly string[]) {
             let followed = clientFeeds.get(client);
             if (!followed) clientFeeds.set(client, (followed = new Set()));
             for (const url of urls) {
@@ -243,13 +250,26 @@ export function createRegistry(deps: RegistryDeps) {
             }
         },
 
-        removeClient(client: Client) {
-            for (const key of clientFeeds.get(client) ?? []) {
-                const feed = feeds.get(key);
-                if (feed?.clients.delete(client) && feed.clients.size === 0) {
-                    drop(feed);
+        unsubscribe(client: Client, urls: readonly string[]) {
+            for (const url of urls) {
+                const key = toFeedKey(url);
+                if (key === undefined) {
+                    client.send({
+                        type: 'status',
+                        url,
+                        state: 'error',
+                        detail: 'not a valid http(s) URL'
+                    });
+                    continue;
                 }
+                leave(client, key);
+                clientFeeds.get(client)?.delete(key);
+                client.send({ type: 'status', url, state: 'unsubscribed' });
             }
+        },
+
+        removeClient(client: Client) {
+            for (const key of clientFeeds.get(client) ?? []) leave(client, key);
             clientFeeds.delete(client);
         },
 

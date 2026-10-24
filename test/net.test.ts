@@ -150,7 +150,7 @@ describe('guarded fetcher', () => {
         const s = setup();
         s.net.feed('http://127.0.0.1/feed', fixture('rss-cloud.xml'));
         const client = recordingClient();
-        s.registry.add(client, ['http://127.0.0.1/feed']);
+        s.registry.subscribe(client, ['http://127.0.0.1/feed']);
         await settle();
         expect(client.messages.at(-1)).toEqual({
             type: 'status',

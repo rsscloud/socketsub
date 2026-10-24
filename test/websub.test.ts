@@ -27,7 +27,7 @@ async function subscribed(env: Record<string, string> = {}) {
     const s = hubFeed(env);
     const hub = fakeHub(s, HUB);
     const client = recordingClient();
-    s.registry.add(client, [FEED]);
+    s.registry.subscribe(client, [FEED]);
     await settle();
     const request = hub.subscribes()[0];
     const res = await hub.verify(request);
@@ -40,7 +40,7 @@ describe('WebSub subscription', () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
 
         const [request] = hub.requests();
@@ -76,8 +76,10 @@ describe('WebSub subscription', () => {
     it('subscribes once for two clients', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
-        s.registry.add(recordingClient(), [FEED]);
-        s.registry.add(recordingClient(), ['https://blog.example/atom.xml#2']);
+        s.registry.subscribe(recordingClient(), [FEED]);
+        s.registry.subscribe(recordingClient(), [
+            'https://blog.example/atom.xml#2'
+        ]);
         await settle();
         expect(hub.requests()).toHaveLength(1);
     });
@@ -85,7 +87,7 @@ describe('WebSub subscription', () => {
     it('rejects verification with the wrong topic, mode, or id', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
-        s.registry.add(recordingClient(), [FEED]);
+        s.registry.subscribe(recordingClient(), [FEED]);
         await settle();
         const request = hub.subscribes()[0];
         expect(
@@ -108,7 +110,7 @@ describe('WebSub subscription', () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         const res = await hub.verify(hub.subscribes()[0], {
             'hub.mode': 'denied',
@@ -128,7 +130,7 @@ describe('WebSub subscription', () => {
         const s = hubFeed();
         fakeHub(s, HUB, 400);
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         expect(client.messages.at(-1)).toEqual({
             type: 'status',
@@ -148,7 +150,7 @@ describe('WebSub subscription', () => {
         });
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [feed]);
+        s.registry.subscribe(client, [feed]);
         await settle();
         await hub.verify(hub.subscribes()[0]);
         expect(client.messages).toEqual([
@@ -172,7 +174,7 @@ describe('WebSub subscription', () => {
         fakeCloud(s, 'http://rpc.rsscloud.example:5337/pleaseNotify');
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [feed]);
+        s.registry.subscribe(client, [feed]);
         await settle();
         expect(hub.requests()).toHaveLength(0);
         expect(client.messages.at(-1)).toMatchObject({
@@ -207,8 +209,8 @@ describe('WebSub delivery', () => {
         );
         const direct = recordingClient();
         const redirected = recordingClient();
-        s.registry.add(direct, [FEED]);
-        s.registry.add(redirected, [alias]);
+        s.registry.subscribe(direct, [FEED]);
+        s.registry.subscribe(redirected, [alias]);
         await settle();
         const [first, second] = hub.subscribes();
         await hub.verify(first);
@@ -259,6 +261,22 @@ describe('WebSub delivery', () => {
 });
 
 describe('WebSub teardown', () => {
+    it('unsubscribes when the last client unsubscribes from the feed', async () => {
+        const { s, hub, client, request } = await subscribed();
+        s.registry.unsubscribe(client, [FEED]);
+        await settle();
+
+        const [unsubscribe] = hub.unsubscribes();
+        expect(unsubscribe?.form.get('hub.callback')).toBe(
+            request?.form.get('hub.callback')
+        );
+        expect(client.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'unsubscribed'
+        });
+    });
+
     it('unsubscribes when the last client leaves', async () => {
         const { s, hub, client, request } = await subscribed();
         s.registry.removeClient(client);
@@ -278,7 +296,7 @@ describe('WebSub teardown', () => {
     it('keeps the subscription while another client remains', async () => {
         const { s, hub, client } = await subscribed();
         const other = recordingClient();
-        s.registry.add(other, [FEED]);
+        s.registry.subscribe(other, [FEED]);
         s.registry.removeClient(client);
         await settle();
         expect(hub.unsubscribes()).toHaveLength(0);
@@ -293,7 +311,7 @@ describe('WebSub teardown', () => {
             return new Response(null, { status: 202 });
         });
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         const subscribe = hub.subscribes()[0];
         expect(subscribe).toBeDefined();
@@ -324,7 +342,7 @@ describe('WebSub renewal', () => {
     async function verifiedWithLease(leaseSeconds: string) {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
-        s.registry.add(recordingClient(), [FEED]);
+        s.registry.subscribe(recordingClient(), [FEED]);
         await settle();
         await hub.verify(hub.subscribes()[0], {
             'hub.lease_seconds': leaseSeconds
@@ -363,7 +381,7 @@ describe('WebSub renewal', () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         const request = hub.subscribes()[0];
         await hub.verify(request, { 'hub.lease_seconds': '1000' });
@@ -395,7 +413,7 @@ describe('WebSub renewal', () => {
             return new Response(null, { status: 202 });
         });
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         await hub.verify(hub.subscribes()[0], { 'hub.lease_seconds': '1000' });
 
@@ -413,7 +431,7 @@ describe('WebSub renewal', () => {
     it('waits the longest timer delay when the hub grants a huge lease', async () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
-        s.registry.add(recordingClient(), [FEED]);
+        s.registry.subscribe(recordingClient(), [FEED]);
         await settle();
         await hub.verify(hub.subscribes()[0], {
             'hub.lease_seconds': '4000000000'
@@ -435,7 +453,7 @@ describe('WebSub renewal', () => {
             return new Response(null, { status: 500 });
         });
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         expect(client.messages.at(-1)).toMatchObject({ state: 'error' });
 
@@ -448,7 +466,7 @@ describe('WebSub renewal', () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         await hub.verify(hub.subscribes()[0]);
         s.registry.removeClient(client);
@@ -463,7 +481,7 @@ describe('WebSub renewal', () => {
         const s = hubFeed();
         const hub = fakeHub(s, HUB);
         const client = recordingClient();
-        s.registry.add(client, [FEED]);
+        s.registry.subscribe(client, [FEED]);
         await settle();
         await hub.verify(hub.subscribes()[0], { 'hub.lease_seconds': '1000' });
         s.registry.removeClient(client);

@@ -54,6 +54,10 @@ export function callbackUrl(config: Config, path: string): string {
     return `${base}${path}`;
 }
 
+export function webSocketUrl(config: Config): string {
+    return callbackUrl(config, '/ws').replace(/^http/, 'ws');
+}
+
 export function rssCloudCallback(config: Config): RssCloudCallback {
     const url = config.publicUrl;
     const https = url.protocol === 'https:';

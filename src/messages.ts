@@ -4,12 +4,22 @@ export type ServerMessage =
     | {
           type: 'status';
           url: string;
-          state: 'pending' | 'subscribed' | 'unsupported' | 'error';
+          state:
+              | 'pending'
+              | 'subscribed'
+              | 'unsupported'
+              | 'error'
+              | 'unsubscribed';
           via?: PushProtocol;
           detail?: string;
       }
     | { type: 'update'; url: string }
     | { type: 'error'; message: string };
+
+export type ClientMessage = {
+    type: 'subscribe' | 'unsubscribe';
+    urls: string[];
+};
 
 export type StatusMessage = Extract<ServerMessage, { type: 'status' }>;
 

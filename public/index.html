@@ -3,122 +3,73 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>socketsub test client</title>
+        <title>socketsub</title>
         <style>
             :root {
                 color-scheme: light dark;
                 font-family: system-ui, sans-serif;
+                line-height: 1.5;
             }
             body {
-                max-width: 52rem;
+                max-width: 60rem;
                 margin: 2rem auto;
                 padding: 0 1rem;
             }
-            textarea {
-                width: 100%;
-                min-height: 8rem;
-                font-family: ui-monospace, monospace;
-                box-sizing: border-box;
-            }
-            .row {
+            nav {
                 display: flex;
-                gap: 0.5rem;
-                align-items: center;
-                margin: 0.5rem 0 1rem;
+                gap: 1rem;
             }
-            #state {
-                margin-left: auto;
-                font-size: 0.9rem;
-                opacity: 0.8;
-            }
-            #log {
+            code,
+            pre {
                 font-family: ui-monospace, monospace;
-                font-size: 0.85rem;
-                white-space: pre-wrap;
-                word-break: break-all;
-                border-top: 1px solid #8884;
-                padding-top: 0.5rem;
+                font-size: 0.9rem;
             }
-            .update {
-                color: #2a8a3e;
+            pre {
+                padding: 0.75rem;
+                overflow-x: auto;
+                background: #8881;
+                border-radius: 4px;
             }
-            .error {
-                color: #c0392b;
-            }
-            .out {
-                opacity: 0.6;
+            .log-panel {
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
             }
         </style>
     </head>
     <body>
-        <h1>socketsub</h1>
-        <p>One feed URL per line. Each send adds to this connection's feeds.</p>
-        <textarea id="urls" spellcheck="false">
-http://scripting.com/rss.xml</textarea>
-        <div class="row">
-            <button id="connect">Connect</button>
-            <button id="send" disabled>Send</button>
-            <button id="clear">Clear log</button>
-            <span id="state">disconnected</span>
+        <nav><strong>socketsub</strong><a href="{{docsPath}}">Docs</a></nav>
+        <p>
+            Push notifications for RSS and Atom feeds over a WebSocket. Send a
+            list of feed URLs, and socketsub tells you when any of them changes,
+            using rssCloud or WebSub behind the scenes.
+        </p>
+        <p>WebSocket URL: <code>{{wsUrl}}</code></p>
+        <p>
+            To try it, paste a subscribe message like this one into the box
+            below and press Send. Each subscribe adds to the feeds this page
+            follows. Send <code>"type": "unsubscribe"</code> to stop following
+            feeds.
+        </p>
+        <pre>
+{"type": "subscribe", "urls": ["http://scripting.com/rss.xml"]}</pre>
+
+        <p>
+            If the connection drops, the viewer reconnects on its own, but the
+            new connection follows no feeds. Subscribe again.
+        </p>
+
+        <div class="log-panel">
+            <socklog-sender id="sender"></socklog-sender>
+            <socklog-controls id="controls"></socklog-controls>
+            <socklog-viewer id="viewer" url="{{wsUrl}}"></socklog-viewer>
         </div>
-        <div id="log"></div>
-        <script>
-            const $ = id => document.getElementById(id);
-            let socket;
 
-            function log(text, cls) {
-                const line = document.createElement('div');
-                line.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
-                if (cls) line.className = cls;
-                $('log').prepend(line);
-            }
-
-            function setState(text, open) {
-                $('state').textContent = text;
-                $('send').disabled = !open;
-                $('connect').textContent = open ? 'Disconnect' : 'Connect';
-            }
-
-            function classify(data) {
-                try {
-                    const message = JSON.parse(data);
-                    if (message.type === 'update') return 'update';
-                    if (message.type === 'error' || message.state === 'error') {
-                        return 'error';
-                    }
-                } catch {
-                    return 'error';
-                }
-                return undefined;
-            }
-
-            $('connect').onclick = () => {
-                if (socket && socket.readyState <= WebSocket.OPEN) {
-                    socket.close();
-                    return;
-                }
-                const url = new URL('ws', location.href);
-                url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-                socket = new WebSocket(url);
-                setState('connecting', false);
-                socket.onopen = () => setState('connected', true);
-                socket.onclose = () => setState('disconnected', false);
-                socket.onerror = () => log('socket error', 'error');
-                socket.onmessage = event =>
-                    log(event.data, classify(event.data));
-            };
-
-            $('send').onclick = () => {
-                const urls = $('urls')
-                    .value.split('\n')
-                    .map(line => line.trim())
-                    .filter(Boolean);
-                const payload = JSON.stringify(urls);
-                socket.send(payload);
-                log(`> ${payload}`, 'out');
-            };
-
-            $('clear').onclick = () => ($('log').textContent = '');
+        <script type="module">
+            import 'https://esm.sh/@andrewshell/socklog@0.3.0';
+            const viewer = document.getElementById('viewer');
+            document.getElementById('controls').store = viewer.getStore();
+            document.getElementById('sender').client = viewer.getClient();
         </script>
     </body>
 </html>

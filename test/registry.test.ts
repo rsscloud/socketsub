@@ -21,7 +21,7 @@ describe('registry', () => {
         const { net, registry } = setup();
         net.feed(FEED, fixture('none.xml'));
         const client = recordingClient();
-        registry.add(client, [FEED]);
+        registry.subscribe(client, [FEED]);
         await settle();
         expect(client.messages).toEqual([
             { type: 'status', url: FEED, state: 'pending' },
@@ -39,8 +39,8 @@ describe('registry', () => {
         net.feed(FEED, fixture('rss-cloud.xml'));
         const a = recordingClient();
         const b = recordingClient();
-        registry.add(a, [FEED]);
-        registry.add(b, ['HTTPS://BLOG.EXAMPLE/feed.xml#top']);
+        registry.subscribe(a, [FEED]);
+        registry.subscribe(b, ['HTTPS://BLOG.EXAMPLE/feed.xml#top']);
         await settle();
         expect(net.to(FEED)).toHaveLength(1);
 
@@ -55,10 +55,10 @@ describe('registry', () => {
     it('gives a late client the current status immediately', async () => {
         const { net, registry } = setup();
         net.feed(FEED, fixture('none.xml'));
-        registry.add(recordingClient(), [FEED]);
+        registry.subscribe(recordingClient(), [FEED]);
         await settle();
         const late = recordingClient();
-        registry.add(late, [FEED]);
+        registry.subscribe(late, [FEED]);
         expect(late.messages).toEqual([
             expect.objectContaining({ url: FEED, state: 'unsupported' })
         ]);
@@ -70,8 +70,8 @@ describe('registry', () => {
         net.feed(FEED, fixture('rss-cloud.xml'));
         net.feed(other, fixture('rss-cloud.xml'));
         const client = recordingClient();
-        registry.add(client, [FEED]);
-        registry.add(client, [other]);
+        registry.subscribe(client, [FEED]);
+        registry.subscribe(client, [other]);
         await settle();
         client.messages.length = 0;
         registry.rssCloud.notify(FEED);
@@ -91,7 +91,7 @@ describe('registry', () => {
         );
         net.feed(FEED, fixture('rss-cloud.xml'));
         const client = recordingClient();
-        registry.add(client, ['http://old.example/rss']);
+        registry.subscribe(client, ['http://old.example/rss']);
         await settle();
         registry.rssCloud.notify(FEED);
         expect(client.messages.at(-1)).toEqual({
@@ -104,7 +104,7 @@ describe('registry', () => {
         const { net, registry } = setup();
         net.feed(FEED, fixture('none.xml'));
         const client = recordingClient();
-        registry.add(client, ['not a url', 'ftp://x.example/feed', FEED]);
+        registry.subscribe(client, ['not a url', 'ftp://x.example/feed', FEED]);
         expect(client.messages.slice(0, 2)).toEqual([
             {
                 type: 'status',
@@ -129,7 +129,7 @@ describe('registry', () => {
     it('reports an error when the feed cannot be fetched', async () => {
         const { registry } = setup();
         const client = recordingClient();
-        registry.add(client, [FEED]);
+        registry.subscribe(client, [FEED]);
         await settle();
         expect(client.messages.at(-1)).toEqual({
             type: 'status',
@@ -147,7 +147,7 @@ describe('registry', () => {
             return new Response(fixture('none.xml'));
         });
         const client = recordingClient();
-        registry.add(client, [FEED]);
+        registry.subscribe(client, [FEED]);
         await settle();
         registry.removeClient(client);
         held.release();
@@ -162,7 +162,7 @@ describe('registry', () => {
         const [a, b, c] = ['a', 'b', 'c'].map(n => `https://${n}.example/rss`);
         for (const url of [a, b, c]) net.feed(url!, fixture('none.xml'));
         const client = recordingClient();
-        registry.add(client, [a!, c!, b!, a!]);
+        registry.subscribe(client, [a!, c!, b!, a!]);
         await settle();
         expect(client.messages).toContainEqual({
             type: 'status',
@@ -180,15 +180,33 @@ describe('registry', () => {
         ).toHaveLength(1);
     });
 
+    it('frees a per-client slot when the client unsubscribes', async () => {
+        const { net, registry } = setup({ MAX_FEEDS_PER_CLIENT: '1' });
+        const [a, b] = ['a', 'b'].map(n => `https://${n}.example/rss`);
+        for (const url of [a, b]) net.feed(url!, fixture('none.xml'));
+        const client = recordingClient();
+        registry.subscribe(client, [a!]);
+        await settle();
+        registry.unsubscribe(client, [a!]);
+        registry.subscribe(client, [b!]);
+        await settle();
+        expect(net.to(b!)).toHaveLength(1);
+        expect(
+            client.messages.filter(
+                m => m.type === 'status' && m.state === 'error'
+            )
+        ).toHaveLength(0);
+    });
+
     it('caps the feeds the server follows at MAX_FEEDS', async () => {
         const { net, registry } = setup({ MAX_FEEDS: '1' });
         const other = 'https://other.example/rss';
         net.feed(FEED, fixture('none.xml'));
         net.feed(other, fixture('none.xml'));
-        registry.add(recordingClient(), [FEED]);
+        registry.subscribe(recordingClient(), [FEED]);
         await settle();
         const late = recordingClient();
-        registry.add(late, [other, FEED]);
+        registry.subscribe(late, [other, FEED]);
         await settle();
         expect(late.messages).toEqual([
             {
@@ -208,11 +226,11 @@ describe('registry', () => {
         net.feed(FEED, fixture('none.xml'));
         net.feed(other, fixture('none.xml'));
         const first = recordingClient();
-        registry.add(first, [FEED]);
+        registry.subscribe(first, [FEED]);
         await settle();
         registry.removeClient(first);
         const second = recordingClient();
-        registry.add(second, [other]);
+        registry.subscribe(second, [other]);
         await settle();
         expect(second.messages.at(-1)).toMatchObject({
             url: other,
@@ -239,7 +257,7 @@ describe('registry', () => {
             });
         }
         const client = recordingClient();
-        registry.add(client, urls);
+        registry.subscribe(client, urls);
         await settle();
         expect(peak).toBe(2);
         expect(
