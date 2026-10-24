@@ -4,8 +4,8 @@ import { Hono } from 'hono';
 import type { Config } from './config.js';
 import { createFetcher, type Lookup } from './net.js';
 import { createRegistry } from './registry.js';
-import { rssCloudRoutes } from './rsscloud.js';
-import { webSubRoutes } from './websub.js';
+import { rssCloudRoutes } from './rsscloud/routes.js';
+import { webSubRoutes } from './websub/routes.js';
 import { wsHandler } from './ws.js';
 
 const MAX_WS_MESSAGE_BYTES = 1024 * 1024;
@@ -40,8 +40,8 @@ export function createApp(deps: AppDeps) {
 
     app.get('/', c => c.html(testClientPage));
     app.get('/health', c => c.json({ ok: true }));
-    app.route('/rsscloud', rssCloudRoutes(registry));
-    app.route('/websub', webSubRoutes(registry));
+    app.route('/rsscloud', rssCloudRoutes(registry.rssCloud));
+    app.route('/websub', webSubRoutes(registry.webSub));
     app.get(
         '/ws',
         wsHandler(upgradeWebSocket, registry, config.maxFeedsPerMessage)

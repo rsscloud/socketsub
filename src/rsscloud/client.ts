@@ -1,9 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
-import { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
-import type { RssCloudCallback } from './config.js';
-import { errorText, type Fetcher, type RequestResult } from './net.js';
-import type { Registry } from './registry.js';
+import type { RssCloudCallback } from '../config.js';
+import { errorText, type Fetcher, type RequestResult } from '../net.js';
 
 const xml = new XMLParser({
     ignoreAttributes: false,
@@ -64,28 +61,4 @@ function parseNotifyResult(status: number, body: string): RequestResult {
     } catch {
         return result(false, unexpected);
     }
-}
-
-const NOTIFY_BODY_LIMIT_BYTES = 1024 * 1024;
-
-export function rssCloudRoutes(registry: Registry) {
-    const routes = new Hono();
-    routes.use(bodyLimit({ maxSize: NOTIFY_BODY_LIMIT_BYTES }));
-
-    routes.get('/notify', c => {
-        const url = c.req.query('url');
-        const challenge = c.req.query('challenge');
-        if (!url || challenge === undefined) return c.notFound();
-        if (!registry.acceptsRssCloudChallenge(url)) return c.notFound();
-        return c.text(challenge);
-    });
-
-    routes.post('/notify', async c => {
-        const body = await c.req.parseBody();
-        const url = body.url;
-        if (typeof url === 'string') registry.notifyRssCloud(url);
-        return c.text('ok');
-    });
-
-    return routes;
 }

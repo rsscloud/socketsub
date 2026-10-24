@@ -1,3 +1,4 @@
+import { MAX_TIMER_MS } from './timer.js';
 import { isHttpUrl } from './url.js';
 
 export type RssCloudCallback = {
@@ -21,9 +22,6 @@ export type Config = {
 };
 
 type Env = Record<string, string | undefined>;
-
-// Node fires any longer setTimeout after 1 ms.
-export const MAX_TIMER_MS = 2 ** 31 - 1;
 
 export function loadConfig(env: Env): Config {
     return {

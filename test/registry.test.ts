@@ -44,7 +44,7 @@ describe('registry', () => {
         await settle();
         expect(net.to(FEED)).toHaveLength(1);
 
-        registry.notifyRssCloud(FEED);
+        registry.rssCloud.notify(FEED);
         expect(a.messages.at(-1)).toEqual({ type: 'update', url: FEED });
         expect(b.messages.at(-1)).toEqual({
             type: 'update',
@@ -74,8 +74,8 @@ describe('registry', () => {
         registry.add(client, [other]);
         await settle();
         client.messages.length = 0;
-        registry.notifyRssCloud(FEED);
-        registry.notifyRssCloud(other);
+        registry.rssCloud.notify(FEED);
+        registry.rssCloud.notify(other);
         expect(client.messages).toEqual([
             { type: 'update', url: FEED },
             { type: 'update', url: other }
@@ -93,7 +93,7 @@ describe('registry', () => {
         const client = recordingClient();
         registry.add(client, ['http://old.example/rss']);
         await settle();
-        registry.notifyRssCloud(FEED);
+        registry.rssCloud.notify(FEED);
         expect(client.messages.at(-1)).toEqual({
             type: 'update',
             url: 'http://old.example/rss'

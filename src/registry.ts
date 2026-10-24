@@ -1,59 +1,38 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import {
-    callbackUrl,
-    MAX_TIMER_MS,
-    rssCloudCallback,
-    type Config
-} from './config.js';
+import type { Config } from './config.js';
 import { discover, type Discovery } from './discover.js';
 import { createLimiter } from './limiter.js';
 import type { Client, PushProtocol, StatusMessage } from './messages.js';
 import { errorText, type Fetcher } from './net.js';
-import { pleaseNotify } from './rsscloud.js';
-import { normalizeUrl, sameUrl } from './url.js';
-import { subscribeAtHub, unsubscribeAtHub } from './websub.js';
+import type { RssCloudCallbacks } from './rsscloud/routes.js';
+import {
+    createRssCloudSubscriber,
+    isRssCloudState,
+    type RssCloudState
+} from './rsscloud/subscriber.js';
+import { normalizeUrl } from './url.js';
+import type { WebSubCallbacks } from './websub/routes.js';
+import {
+    createWebSubSubscriber,
+    isWebSubState,
+    type WebSubState
+} from './websub/subscriber.js';
 
 export type FeedKey = string & { __brand: 'FeedKey' };
 
-type Timer = ReturnType<typeof setTimeout>;
-
-const UNSUBSCRIBE_VERIFY_WINDOW_MS = 10 * 60_000;
-const RENEW_AT_LEASE_FRACTION = 0.9;
-const MIN_RENEW_SECONDS = 60;
-const SECRET_BYTES = 24;
-
-type RssCloudTarget = { endpoint: URL; topic: string };
-
-type WebSubTarget = { hub: URL; topic: string; id: string; secret: string };
-
 export type FeedState =
     | { kind: 'discovering' }
-    | { kind: 'subscribing'; via: 'rsscloud'; target: RssCloudTarget }
-    | {
-          kind: 'subscribing';
-          via: 'websub';
-          target: WebSubTarget;
-          detail?: string;
-      }
-    | {
-          kind: 'active';
-          via: 'rsscloud';
-          target: RssCloudTarget;
-          renewTimer: Timer;
-      }
-    | {
-          kind: 'active';
-          via: 'websub';
-          target: WebSubTarget;
-          renewTimer: Timer;
-      }
+    | RssCloudState
+    | WebSubState
     | { kind: 'unsupported'; detail: string }
     | { kind: 'failed'; reason: string; via?: PushProtocol };
 
-type RssCloudOutcome =
-    | { kind: 'subscribed' }
-    | { kind: 'dropped' }
-    | { kind: 'failed'; reason: string };
+export type FeedHandle = {
+    readonly state: FeedState;
+    transition(state: FeedState): void;
+    isLive(): boolean;
+    addAlias(url: string): void;
+    sendUpdate(): void;
+};
 
 type FeedSub = {
     key: FeedKey;
@@ -77,9 +56,8 @@ export function createRegistry(deps: RegistryDeps) {
     const clientFeeds = new Map<Client, Set<FeedKey>>();
     const aliasIndex = new Map<string, Set<FeedKey>>();
     const limit = createLimiter(deps.config.discoveryConcurrency);
-    const callback = rssCloudCallback(deps.config);
-    const feedKeyByWebSubId = new Map<string, FeedKey>();
-    const webSubUnsubscribing = new Map<string, WebSubTarget>();
+    const rssCloudSubscriber = createRssCloudSubscriber(deps);
+    const webSubSubscriber = createWebSubSubscriber(deps);
 
     function isLive(feed: FeedSub): boolean {
         return feeds.get(feed.key) === feed;
@@ -94,32 +72,12 @@ export function createRegistry(deps: RegistryDeps) {
         keys.add(feed.key);
     }
 
-    function webSubFeed(id: string) {
-        const key = feedKeyByWebSubId.get(id);
-        const feed = key === undefined ? undefined : feeds.get(key);
-        const state = feed?.state;
-        if (
-            !feed ||
-            (state?.kind !== 'subscribing' && state?.kind !== 'active') ||
-            state.via !== 'websub' ||
-            state.target.id !== id
-        ) {
-            return undefined;
-        }
-        return { feed, state };
-    }
-
     function rssCloudFeeds(url: string): FeedSub[] {
         const alias = normalizeUrl(url);
         const keys = alias === undefined ? undefined : aliasIndex.get(alias);
         return [...(keys ?? [])].flatMap(key => {
             const feed = feeds.get(key);
-            const state = feed?.state;
-            return feed &&
-                (state?.kind === 'subscribing' || state?.kind === 'active') &&
-                state.via === 'rsscloud'
-                ? [feed]
-                : [];
+            return feed && isRssCloudState(feed.state) ? [feed] : [];
         });
     }
 
@@ -129,26 +87,22 @@ export function createRegistry(deps: RegistryDeps) {
         }
     }
 
+    function handleFor(feed: FeedSub): FeedHandle {
+        return {
+            get state() {
+                return feed.state;
+            },
+            transition: state => transition(feed, state),
+            isLive: () => isLive(feed),
+            addAlias: url => addAlias(feed, url),
+            sendUpdate: () => sendUpdate(feed)
+        };
+    }
+
     function drop(feed: FeedSub) {
         const { state } = feed;
         cancelRenewal(state);
-        if (
-            (state.kind === 'subscribing' || state.kind === 'active') &&
-            state.via === 'websub'
-        ) {
-            const { target } = state;
-            feedKeyByWebSubId.delete(target.id);
-            webSubUnsubscribing.set(target.id, target);
-            setTimeout(
-                () => webSubUnsubscribing.delete(target.id),
-                UNSUBSCRIBE_VERIFY_WINDOW_MS
-            ).unref();
-            void unsubscribeAtHub(deps.fetcher, hubSubscription(target)).then(
-                result => {
-                    if (!result.ok) webSubUnsubscribing.delete(target.id);
-                }
-            );
-        }
+        if (isWebSubState(state)) webSubSubscriber.unsubscribe(state.target);
         feeds.delete(feed.key);
         for (const alias of feed.aliases) {
             const keys = aliasIndex.get(alias);
@@ -183,10 +137,11 @@ export function createRegistry(deps: RegistryDeps) {
         }
         if (!discovery || !isLive(feed)) return;
         addAlias(feed, discovery.finalUrl);
+        const handle = handleFor(feed);
 
         let rssCloudFailure: string | undefined;
         if (discovery.rssCloud) {
-            const outcome = await subscribeRssCloud(feed, {
+            const outcome = await rssCloudSubscriber.subscribe(handle, {
                 endpoint: discovery.rssCloud.endpoint,
                 topic: discovery.finalUrl
             });
@@ -194,7 +149,11 @@ export function createRegistry(deps: RegistryDeps) {
             rssCloudFailure = outcome.reason;
         }
         if (discovery.webSub) {
-            await subscribeWebSub(feed, discovery.webSub, rssCloudFailure);
+            await webSubSubscriber.subscribe(
+                handle,
+                discovery.webSub,
+                rssCloudFailure
+            );
             return;
         }
         transition(
@@ -208,158 +167,14 @@ export function createRegistry(deps: RegistryDeps) {
         );
     }
 
-    async function subscribeRssCloud(
-        feed: FeedSub,
-        target: RssCloudTarget
-    ): Promise<RssCloudOutcome> {
-        // The cloud may call our challenge route before pleaseNotify
-        // returns, so the feed must already be in a subscribing state.
-        transition(feed, { kind: 'subscribing', via: 'rsscloud', target });
-        const result = await pleaseNotify(
-            deps.fetcher,
-            target.endpoint,
-            callback,
-            target.topic
-        );
-        if (!isLive(feed)) return { kind: 'dropped' };
-        if (!result.ok) {
-            return {
-                kind: 'failed',
-                reason: `rssCloud registration failed: ${result.reason}`
-            };
+    const rssCloud: RssCloudCallbacks = {
+        acceptsChallenge: url => rssCloudFeeds(url).length > 0,
+        notify(url) {
+            for (const feed of rssCloudFeeds(url)) sendUpdate(feed);
         }
-        transition(feed, {
-            kind: 'active',
-            via: 'rsscloud',
-            target,
-            renewTimer: scheduleRssCloudRenewal(feed, target)
-        });
-        return { kind: 'subscribed' };
-    }
+    };
 
-    async function subscribeWebSub(
-        feed: FeedSub,
-        found: { hub: URL; topic: string },
-        rssCloudFailure: string | undefined
-    ) {
-        const target: WebSubTarget = {
-            ...found,
-            id: randomUUID(),
-            secret: randomBytes(SECRET_BYTES).toString('hex')
-        };
-        addAlias(feed, target.topic);
-        feedKeyByWebSubId.set(target.id, feed.key);
-        transition(feed, {
-            kind: 'subscribing',
-            via: 'websub',
-            target,
-            ...(rssCloudFailure && {
-                detail: `${rssCloudFailure}; trying WebSub`
-            })
-        });
-        const result = await subscribeToHub(target);
-        // A teardown during the request already sent the unsubscribe.
-        if (result.ok || !webSubFeed(target.id)) return;
-        feedKeyByWebSubId.delete(target.id);
-        transition(feed, {
-            kind: 'failed',
-            via: 'websub',
-            reason: [
-                rssCloudFailure,
-                `WebSub subscribe failed: ${result.reason}`
-            ]
-                .filter(Boolean)
-                .join('; ')
-        });
-    }
-
-    function hubSubscription(target: WebSubTarget) {
-        return {
-            hub: target.hub,
-            topic: target.topic,
-            callback: callbackUrl(deps.config, `/websub/${target.id}`)
-        };
-    }
-
-    function subscribeToHub(target: WebSubTarget) {
-        return subscribeAtHub(
-            deps.fetcher,
-            hubSubscription(target),
-            target.secret,
-            deps.config.webSubLeaseSeconds
-        );
-    }
-
-    function scheduleWebSubRenewal(
-        feed: FeedSub,
-        target: WebSubTarget,
-        leaseSeconds: number
-    ): Timer {
-        const renewSeconds = Math.max(
-            MIN_RENEW_SECONDS,
-            Math.floor(leaseSeconds * RENEW_AT_LEASE_FRACTION)
-        );
-        const graceSeconds = Math.max(
-            MIN_RENEW_SECONDS,
-            leaseSeconds - renewSeconds
-        );
-        const fail = (reason: string) => {
-            feedKeyByWebSubId.delete(target.id);
-            transition(feed, { kind: 'failed', via: 'websub', reason });
-        };
-        return schedule(async () => {
-            const before = feed.state;
-            const result = await subscribeToHub(target);
-            if (!webSubFeed(target.id)) return;
-            if (!result.ok) {
-                fail(`WebSub renewal failed: ${result.reason}`);
-                return;
-            }
-            // A verification that already arrived armed the next renewal.
-            if (feed.state !== before) return;
-            transition(feed, {
-                kind: 'active',
-                via: 'websub',
-                target,
-                renewTimer: schedule(
-                    () =>
-                        fail(
-                            'WebSub hub did not verify the renewal before the lease ended'
-                        ),
-                    graceSeconds * 1000
-                )
-            });
-        }, renewSeconds * 1000);
-    }
-
-    function scheduleRssCloudRenewal(
-        feed: FeedSub,
-        target: RssCloudTarget
-    ): Timer {
-        return schedule(async () => {
-            const result = await pleaseNotify(
-                deps.fetcher,
-                target.endpoint,
-                callback,
-                target.topic
-            );
-            if (!isLive(feed)) return;
-            if (result.ok) {
-                transition(feed, {
-                    kind: 'active',
-                    via: 'rsscloud',
-                    target,
-                    renewTimer: scheduleRssCloudRenewal(feed, target)
-                });
-                return;
-            }
-            transition(feed, {
-                kind: 'failed',
-                via: 'rsscloud',
-                reason: `rssCloud renewal failed: ${result.reason}`
-            });
-        }, deps.config.rssCloudRenewMs);
-    }
+    const webSub: WebSubCallbacks = webSubSubscriber.callbacks;
 
     return {
         add(client: Client, urls: readonly string[]) {
@@ -418,68 +233,8 @@ export function createRegistry(deps: RegistryDeps) {
             clientFeeds.delete(client);
         },
 
-        acceptsRssCloudChallenge(url: string): boolean {
-            return rssCloudFeeds(url).length > 0;
-        },
-
-        notifyRssCloud(url: string) {
-            for (const feed of rssCloudFeeds(url)) sendUpdate(feed);
-        },
-
-        verifyWebSub(
-            id: string,
-            intent: {
-                mode: 'subscribe' | 'unsubscribe';
-                topic: string;
-                leaseSeconds?: number;
-            }
-        ): boolean {
-            if (intent.mode === 'unsubscribe') {
-                const target = webSubUnsubscribing.get(id);
-                if (!target || !sameUrl(target.topic, intent.topic)) {
-                    return false;
-                }
-                webSubUnsubscribing.delete(id);
-                return true;
-            }
-            const found = webSubFeed(id);
-            if (!found || !sameUrl(found.state.target.topic, intent.topic)) {
-                return false;
-            }
-            const { feed, state } = found;
-            transition(feed, {
-                kind: 'active',
-                via: 'websub',
-                target: state.target,
-                renewTimer: scheduleWebSubRenewal(
-                    feed,
-                    state.target,
-                    intent.leaseSeconds ?? deps.config.webSubLeaseSeconds
-                )
-            });
-            return true;
-        },
-
-        denyWebSub(id: string, reason: string) {
-            webSubUnsubscribing.delete(id);
-            const found = webSubFeed(id);
-            if (!found) return;
-            feedKeyByWebSubId.delete(id);
-            transition(found.feed, {
-                kind: 'failed',
-                via: 'websub',
-                reason: `WebSub hub denied the subscription: ${reason}`
-            });
-        },
-
-        webSubSecret(id: string): string | undefined {
-            return webSubFeed(id)?.state.target.secret;
-        },
-
-        notifyWebSub(id: string) {
-            const found = webSubFeed(id);
-            if (found) sendUpdate(found.feed);
-        }
+        rssCloud,
+        webSub
     };
 }
 
@@ -527,8 +282,4 @@ function sameStatus(a: FeedState, b: FeedState): boolean {
         JSON.stringify(statusMessage('', a)) ===
         JSON.stringify(statusMessage('', b))
     );
-}
-
-function schedule(task: () => void, delayMs: number): Timer {
-    return setTimeout(task, Math.min(delayMs, MAX_TIMER_MS));
 }
