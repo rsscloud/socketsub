@@ -4,6 +4,7 @@ import {
     failingUpstream,
     fakeCloud,
     recordingClient,
+    seededRandom,
     settle,
     setup
 } from './support/harness.js';
@@ -284,17 +285,15 @@ describe('rssCloud renewal retries', () => {
     it('stays subscribed and retries a failed renewal with growing backoff', async () => {
         const { s, clients, start } = await registered();
         const times = failingUpstream(s, CLOUD);
-        await advance(24 * HOUR + 3 * MINUTE);
-        expect(times.map(t => t - start)).toEqual([
-            24 * HOUR,
-            24 * HOUR + MINUTE,
-            24 * HOUR + 3 * MINUTE
+        await advance(24 * HOUR + 4 * MINUTE);
+        expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
+            0, 1.5, 4
         ]);
         expect(clients[0]!.messages.at(-1)).toEqual(subscribed);
         expect(clients[0]!.messages).toHaveLength(3);
 
         const cloud = fakeCloud(s, CLOUD);
-        await advance(4 * MINUTE);
+        await advance(4.5 * MINUTE);
         expect(cloud.challenges).toEqual([{ status: 200, body: 'c-123' }]);
         await advance(24 * HOUR - 1);
         expect(cloud.challenges).toHaveLength(1);
@@ -333,7 +332,7 @@ describe('rssCloud renewal retries', () => {
             if (times.length === 2) await held.wait();
             return new Response(null, { status: 503 });
         });
-        await advance(24 * HOUR + MINUTE);
+        await advance(24 * HOUR + 1.5 * MINUTE);
         expect(times).toHaveLength(2);
 
         s.registry.removeClient(clients[0]!);
@@ -355,7 +354,7 @@ describe('rssCloud renewal retries', () => {
         });
         await advance(24 * HOUR);
         expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
-            0, 1, 3, 7, 15, 31
+            0, 1.5, 4, 8.5, 17, 33.5
         ]);
     });
 
@@ -365,7 +364,7 @@ describe('rssCloud renewal retries', () => {
         const times = failingUpstream(s, CLOUD);
         await advance(24 * HOUR + 10 * MINUTE);
         expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
-            0, 1, 3, 7
+            0, 1.5, 4, 8.5
         ]);
 
         const cloud = fakeCloud(s, CLOUD);
@@ -383,7 +382,7 @@ describe('rssCloud renewal retries', () => {
         const times = failingUpstream(s, CLOUD, 503, { 'retry-after': '1800' });
         await advance(26 * HOUR);
         expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
-            0, 30
+            0, 30.5
         ]);
         expect(clients[0]!.messages.at(-1)).toMatchObject({
             state: 'error',
@@ -415,5 +414,70 @@ describe('rssCloud renewal retries', () => {
         s.registry.subscribe(late, [other]);
         await settle();
         expect(late.messages.at(-1)).toMatchObject({ state: 'subscribed' });
+    });
+});
+
+describe('many feeds on one recovering cloud', () => {
+    const HOUR = 3600_000;
+    const MINUTE = 60_000;
+    const FEEDS = 50;
+    const OUTAGE_MS = 5 * MINUTE;
+    const BUSY_ABOVE = 2;
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('renews every feed after an outage without flooding the cloud', async () => {
+        const s = setup({}, seededRandom(7));
+        const urls = Array.from(
+            { length: FEEDS },
+            (_, i) => `https://blog${i}.example/feed.xml`
+        );
+        for (const url of urls) s.net.feed(url, fixture('rss-cloud.xml'));
+        fakeCloud(s, CLOUD);
+        const clients = urls.map(url => {
+            const client = recordingClient();
+            s.registry.subscribe(client, [url]);
+            return client;
+        });
+        await settle();
+        const start = Date.now();
+
+        const recoversAt = start + 24 * HOUR + OUTAGE_MS;
+        let inFlight = 0;
+        let peak = 0;
+        let requests = 0;
+        const pause = (ms: number) =>
+            new Promise(resolve => setTimeout(resolve, ms));
+        s.net.on(CLOUD, async () => {
+            const at = Date.now();
+            requests++;
+            peak = Math.max(peak, ++inFlight);
+            await pause(200);
+            const busy = inFlight > BUSY_ABOVE;
+            await pause(200);
+            inFlight--;
+            if (at < recoversAt || busy) {
+                return new Response(null, { status: 503 });
+            }
+            return Response.json({ success: true, msg: 'ok' });
+        });
+
+        await vi.advanceTimersByTimeAsync(26 * HOUR);
+        await settle();
+
+        expect(peak).toBeLessThanOrEqual(4);
+        // One success per feed, plus failures that each cool the cloud: the
+        // first wave and each overload fail at most four in-flight requests.
+        expect(requests).toBeLessThanOrEqual(FEEDS + 20);
+        for (const client of clients) {
+            expect(client.messages.at(-1)).toMatchObject({
+                state: 'subscribed'
+            });
+        }
     });
 });

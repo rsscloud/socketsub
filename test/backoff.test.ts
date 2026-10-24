@@ -114,14 +114,22 @@ describe('origin backoff', () => {
         expect(r.net.requests).toHaveLength(2);
     });
 
-    it('starts over after the origin answers', async () => {
+    it('halves the streak each time the origin answers', async () => {
         const r = rig();
         r.respond(503);
+        for (let i = 0; i < 3; i++) {
+            await r.get(URL_A);
+            r.waitOut();
+        }
+        r.respond(200);
         await r.get(URL_A);
-        r.waitOut();
+        r.respond(503);
         await r.get(URL_A);
+        expect(r.cooldown()).toBe(2 * MINUTE);
+
         r.waitOut();
         r.respond(200);
+        await r.get(URL_A);
         await r.get(URL_A);
         r.respond(503);
         await r.get(URL_A);

@@ -523,9 +523,9 @@ describe('WebSub renewal retries', () => {
     it('stays subscribed and retries a failed renewal with growing backoff', async () => {
         const { s, client, start } = await verified();
         const times = failingUpstream(s, HUB);
-        await advance(RENEW_AT + 3 * MINUTE);
+        await advance(RENEW_AT + 4 * MINUTE);
         expect(times.map(t => (t - start - RENEW_AT) / MINUTE)).toEqual([
-            0, 1, 3
+            0, 1.5, 4
         ]);
         expect(client.messages.at(-1)).toEqual({
             type: 'status',
@@ -536,7 +536,7 @@ describe('WebSub renewal retries', () => {
         const sent = client.messages.length;
 
         const hub = fakeHub(s, HUB);
-        await advance(4 * MINUTE);
+        await advance(4.5 * MINUTE);
         expect(hub.subscribes()).toHaveLength(5);
         await hub.verify(hub.subscribes()[4], { 'hub.lease_seconds': LEASE });
         await advance(RENEW_AT - 1);
@@ -580,7 +580,7 @@ describe('WebSub renewal retries', () => {
         });
         await advance(36_000_000);
         expect(times.map(t => (t - start - RENEW_AT) / MINUTE)).toEqual([
-            0, 1, 3, 7, 15, 31
+            0, 1.5, 4, 8.5, 17, 33.5
         ]);
         const hub = fakeHub(s, HUB);
         const delivery = await hub.deliver(request, '<feed/>', sign('sha256'));
