@@ -14,7 +14,11 @@ export function testConfig(env: Record<string, string> = {}) {
 export function setup(env: Record<string, string> = {}) {
     const net = createFakeNet();
     const config = testConfig(env);
-    const created = createApp({ config, fetch: net.fetch });
+    const created = createApp({
+        config,
+        fetch: net.fetch,
+        lookup: async () => ['93.184.215.14']
+    });
     return { net, config, ...created };
 }
 

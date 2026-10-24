@@ -1,3 +1,6 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { BlockList, isIP } from 'node:net';
+
 export type FetchResult = {
     status: number;
     url: string;
@@ -15,19 +18,72 @@ export type Fetcher = (
     request?: FetchRequest
 ) => Promise<FetchResult>;
 
-const MAX_REDIRECTS = 5;
+export type Lookup = (hostname: string) => Promise<string[]>;
+
+export const systemLookup: Lookup = async hostname =>
+    (await dnsLookup(hostname, { all: true })).map(entry => entry.address);
 
 export type FetcherDeps = {
     fetch: typeof fetch;
+    lookup: Lookup;
     timeoutMs: number;
+    allowPrivateHosts: boolean;
 };
 
+const MAX_REDIRECTS = 5;
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+
+const blocked = new BlockList();
+for (const [network, prefix] of [
+    ['0.0.0.0', 8],
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24],
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],
+    ['224.0.0.0', 4],
+    ['240.0.0.0', 4]
+] as const) {
+    blocked.addSubnet(network, prefix, 'ipv4');
+}
+for (const [network, prefix] of [
+    ['::', 128],
+    ['::1', 128],
+    ['fc00::', 7],
+    ['fe80::', 10],
+    ['ff00::', 8]
+] as const) {
+    blocked.addSubnet(network, prefix, 'ipv6');
+}
+
+export function isPrivateAddress(address: string): boolean {
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];
+    if (mapped) return isPrivateAddress(mapped);
+    const family = isIP(address);
+    if (family === 4) return blocked.check(address, 'ipv4');
+    if (family === 6) return blocked.check(address, 'ipv6');
+    return true;
+}
+
 export function createFetcher(deps: FetcherDeps): Fetcher {
+    async function assertAllowed(url: URL) {
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            throw new Error(`refusing ${url.protocol} URL`);
+        }
+        if (deps.allowPrivateHosts) return;
+        const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
+        const addresses = isIP(host) ? [host] : await deps.lookup(host);
+        if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
+            throw new Error(`refusing private or unresolvable host ${host}`);
+        }
+    }
+
     return async (url, request = {}) => {
         const signal = AbortSignal.timeout(deps.timeoutMs);
-        const headers: Record<string, string> = {
-            'user-agent': 'socketsub'
-        };
+        const headers: Record<string, string> = { 'user-agent': 'socketsub' };
         if (request.accept) headers.accept = request.accept;
         const init: RequestInit = request.form
             ? { method: 'POST', headers, body: request.form, signal }
@@ -35,6 +91,7 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
 
         let current = new URL(url);
         for (let hop = 0; ; hop++) {
+            await assertAllowed(current);
             const res = await deps.fetch(current, {
                 ...init,
                 redirect: 'manual'
@@ -50,10 +107,28 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
                 status: res.status,
                 url: current.href,
                 headers: res.headers,
-                body: await res.text()
+                body: await readCapped(res, MAX_BODY_BYTES)
             };
         }
     };
+}
+
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+    if (Number(res.headers.get('content-length')) > maxBytes) {
+        await res.body?.cancel();
+        throw new Error('response is larger than 5 MB');
+    }
+    if (!res.body) return '';
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of res.body) {
+        total += chunk.byteLength;
+        if (total > maxBytes) {
+            throw new Error('response is larger than 5 MB');
+        }
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks).toString('utf8');
 }
 
 function isRedirect(status: number): boolean {

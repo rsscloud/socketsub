@@ -1,14 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { discover } from '../src/discover.js';
 import { createFetcher } from '../src/net.js';
-import { createFakeNet, fixture } from './support/fake-net.js';
+import { createFakeNet, fixture, type FakeNet } from './support/fake-net.js';
 
 const FEED = 'https://blog.example/feed.xml';
+
+const fetcherFor = (net: FakeNet) =>
+    createFetcher({
+        fetch: net.fetch,
+        lookup: async () => ['93.184.215.14'],
+        timeoutMs: 1000,
+        allowPrivateHosts: false
+    });
 
 async function discoverFixture(name: string, headers?: Record<string, string>) {
     const net = createFakeNet();
     net.feed(FEED, fixture(name), headers);
-    return discover(createFetcher({ fetch: net.fetch, timeoutMs: 1000 }), FEED);
+    return discover(fetcherFor(net), FEED);
 }
 
 describe('discover', () => {
@@ -97,10 +105,7 @@ describe('discover', () => {
     it('reports nothing for a non-XML body', async () => {
         const net = createFakeNet();
         net.feed(FEED, '<html><body>not a feed');
-        const d = await discover(
-            createFetcher({ fetch: net.fetch, timeoutMs: 1000 }),
-            FEED
-        );
+        const d = await discover(fetcherFor(net), FEED);
         expect(d).toEqual({ finalUrl: FEED });
     });
 
@@ -115,18 +120,15 @@ describe('discover', () => {
                 })
         );
         net.feed(FEED, fixture('rss-cloud.xml'));
-        const d = await discover(
-            createFetcher({ fetch: net.fetch, timeoutMs: 1000 }),
-            'http://old.example/rss'
-        );
+        const d = await discover(fetcherFor(net), 'http://old.example/rss');
         expect(d.finalUrl).toBe(FEED);
         expect(d.rsscloud).toBeDefined();
     });
 
     it('throws when the feed is not 2xx', async () => {
         const net = createFakeNet();
-        await expect(
-            discover(createFetcher({ fetch: net.fetch, timeoutMs: 1000 }), FEED)
-        ).rejects.toThrow(/HTTP 404/);
+        await expect(discover(fetcherFor(net), FEED)).rejects.toThrow(
+            /HTTP 404/
+        );
     });
 });
