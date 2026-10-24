@@ -75,6 +75,19 @@ describe('websocket protocol', () => {
         expect(net.requests).toHaveLength(0);
     });
 
+    it('closes a socket that sends a message over 1 MiB', async () => {
+        const { connect } = await start();
+        const client = await connect();
+        const closed = new Promise<number>(resolve =>
+            client.socket.addEventListener('close', e => resolve(e.code), {
+                once: true
+            })
+        );
+        client.send(JSON.stringify(['x'.repeat(1024 * 1024)]));
+        expect(await closed).toBe(1009);
+        expect(client.messages).toEqual([]);
+    });
+
     it('delivers updates to each socket with its own URL string', async () => {
         const env = await start();
         env.net.feed(FEED, fixture('rss-cloud.xml'));

@@ -26,7 +26,7 @@ Connect to `/ws` and send a JSON array of feed URLs as a text message:
 ```
 
 Each array adds to the feeds already watched on that connection. Sending a URL
-again is harmless.
+again is harmless. A message larger than 1 MiB closes the connection with code 1009.
 
 The server sends three kinds of JSON messages. `url` is always the exact string
 the client sent, even after redirects.

@@ -22,7 +22,12 @@ const testClientPage = readFileSync(
 export function createApp(deps: AppDeps) {
     const { config } = deps;
     const app = new Hono();
-    const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
+    const { upgradeWebSocket, injectWebSocket, wss } = createNodeWebSocket({
+        app
+    });
+    // @hono/node-ws takes no ws options, but ws reads maxPayload from
+    // wss.options on each upgrade. Larger messages close with 1009.
+    wss.options.maxPayload = 1024 * 1024;
     const fetcher = createFetcher({
         fetch: deps.fetch,
         lookup: deps.lookup,
