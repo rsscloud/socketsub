@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixture } from './support/fake-net.js';
+import { fixture, gate } from './support/fake-net.js';
 import {
     fakeCloud,
     fakeHub,
@@ -286,11 +286,10 @@ describe('WebSub teardown', () => {
 
     it('unsubscribes and refuses late verification when the client leaves mid-subscribe', async () => {
         const s = hubFeed();
-        let release!: () => void;
-        const gate = new Promise<void>(r => (release = r));
+        const held = gate();
         const hub = fakeHub(s, HUB);
         s.net.on(HUB, async request => {
-            if (request.form.get('hub.mode') === 'subscribe') await gate;
+            if (request.form.get('hub.mode') === 'subscribe') await held.wait();
             return new Response(null, { status: 202 });
         });
         const client = recordingClient();
@@ -304,7 +303,7 @@ describe('WebSub teardown', () => {
         const sent = client.messages.length;
         expect(hub.unsubscribes()).toHaveLength(1);
 
-        release();
+        held.release();
         await settle();
         expect((await hub.verify(subscribe)).status).toBe(404);
         expect(await (await hub.verify(hub.unsubscribes()[0])).text()).toBe(

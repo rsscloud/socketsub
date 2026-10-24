@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixture } from './support/fake-net.js';
+import { fixture, gate } from './support/fake-net.js';
 import {
     fakeCloud,
     recordingClient,
@@ -223,12 +223,11 @@ describe('rssCloud renewal', () => {
 
     it('never starts renewing when the client leaves during pleaseNotify', async () => {
         const s = cloudFeed({ RSSCLOUD_RENEW_HOURS: '1' });
-        let release!: () => void;
-        const gate = new Promise<void>(r => (release = r));
+        const held = gate();
         let calls = 0;
         s.net.on(CLOUD, async () => {
             calls++;
-            await gate;
+            await held.wait();
             return Response.json({ success: true, msg: 'ok' });
         });
         const client = recordingClient();
@@ -236,7 +235,7 @@ describe('rssCloud renewal', () => {
         await settle();
         expect(calls).toBe(1);
         s.registry.removeClient(client);
-        release();
+        held.release();
         await settle();
         await vi.advanceTimersByTimeAsync(5 * 3600_000);
         await settle();
