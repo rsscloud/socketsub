@@ -14,6 +14,8 @@ export type FetchResult = {
 export type FetchRequest = {
     form?: URLSearchParams;
     accept?: string;
+    // The caller's subscription lapses unless this request goes out now.
+    lastChance?: boolean;
 };
 
 export type Fetcher = (
@@ -138,7 +140,10 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
             );
         }
         return limit(url.origin, async () => {
-            const attempt = deps.backoff.begin(url.origin);
+            const attempt = deps.backoff.begin(
+                url.origin,
+                request.lastChance === true
+            );
             if (!attempt.admitted) {
                 throw new CoolingDownError(url.origin, attempt.until);
             }

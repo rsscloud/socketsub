@@ -354,7 +354,7 @@ describe('rssCloud renewal retries', () => {
         });
         await advance(24 * HOUR);
         expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
-            0, 1.5, 4, 8.5, 17, 33.5
+            0, 1.5, 4, 8.5, 17, 33.5, 55
         ]);
     });
 
@@ -382,9 +382,73 @@ describe('rssCloud renewal retries', () => {
         const times = failingUpstream(s, CLOUD, 503, { 'retry-after': '1800' });
         await advance(26 * HOUR);
         expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
-            0, 30.5
+            0, 30.5, 55
         ]);
         expect(clients[0]!.messages.at(-1)).toMatchObject({
+            state: 'error',
+            detail: expect.stringContaining(
+                'expires before the cloud can be retried'
+            )
+        });
+    });
+
+    it('makes one last attempt before the registration expires, even while the cloud cools down', async () => {
+        const { s, clients, start } = await registered();
+        const times: number[] = [];
+        const recoversAt = start + 24 * HOUR + 40 * MINUTE;
+        s.net.on(CLOUD, () => {
+            times.push(Date.now());
+            return Date.now() < recoversAt
+                ? new Response(null, { status: 503 })
+                : Response.json({ success: true, msg: 'ok' });
+        });
+        await advance(26 * HOUR);
+        expect(times.map(t => (t - start - 24 * HOUR) / MINUTE)).toEqual([
+            0, 1.5, 4, 8.5, 17, 33.5, 55
+        ]);
+        expect(clients[0]!.messages.at(-1)).toEqual(subscribed);
+        expect(clients[0]!.messages).toHaveLength(3);
+    });
+
+    it('lets feeds sharing a deadline take turns at the last attempt', async () => {
+        const other = 'https://other.example/feed.xml';
+        const { s, clients, start } = await registered([FEED, other]);
+        const held = gate();
+        const attempts: [string, number][] = [];
+        const lastAt = start + 24 * HOUR + 55 * MINUTE;
+        s.net.on(CLOUD, async request => {
+            const feed = request.form.get('url1') ?? '';
+            attempts.push([feed, (Date.now() - start - 24 * HOUR) / MINUTE]);
+            if (Date.now() < lastAt) return new Response(null, { status: 503 });
+            if (feed === FEED) await held.wait();
+            return Response.json({ success: true, msg: 'ok' });
+        });
+        await advance(24 * HOUR + 55 * MINUTE);
+        expect(attempts.slice(-1)).toEqual([[FEED, 55]]);
+
+        held.release();
+        await advance(5 * MINUTE);
+        expect(attempts.slice(-2)).toEqual([
+            [FEED, 55],
+            [other, 57.5]
+        ]);
+        for (const client of clients) {
+            expect(client.messages.at(-1)).toMatchObject({
+                state: 'subscribed'
+            });
+        }
+    });
+
+    it('fails on the first failed renewal when RSSCLOUD_RENEW_HOURS leaves no margin', async () => {
+        const s = cloudFeed({ RSSCLOUD_RENEW_HOURS: '25' });
+        fakeCloud(s, CLOUD);
+        const client = recordingClient();
+        s.registry.subscribe(client, [FEED]);
+        await settle();
+        const times = failingUpstream(s, CLOUD);
+        await advance(27 * HOUR);
+        expect(times).toHaveLength(1);
+        expect(client.messages.at(-1)).toMatchObject({
             state: 'error',
             detail: expect.stringContaining(
                 'expires before the cloud can be retried'

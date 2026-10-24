@@ -6,6 +6,12 @@ const MAX_RETRY_AFTER_MS = 6 * 3600_000;
 // Requests waiting on one origin retry at random points across this window
 // after its cooldown, instead of all at the instant it ends.
 const RETRY_SPREAD_MS = 60_000;
+// The last renewal attempt runs this long before the subscription lapses.
+const LAST_ATTEMPT_MARGIN_MS = 5 * 60_000;
+// Below this, a deferred last attempt has no time left to wait for a slot.
+const MIN_LAST_ATTEMPT_WINDOW_MS = 1000;
+
+import type { RequestFailure } from './net.js';
 
 export type Clock = { now(): number; random(): number };
 
@@ -18,10 +24,17 @@ export type Admission =
     | { admitted: true; finish(exchange: Exchange): void }
     | { admitted: false; until: number };
 
+export type Retry = { at: number; lastChance: boolean };
+
 export type Backoff = {
-    begin(origin: string): Admission;
+    begin(origin: string, lastChance: boolean): Admission;
     cooldownEnd(origin: string): number | undefined;
-    retryAt(origin: string, deadline: number): number | undefined;
+    retryAt(
+        origin: string,
+        deadline: number,
+        failure: RequestFailure,
+        lastChance: boolean
+    ): Retry | undefined;
 };
 
 // `mark` is the last request ticket issued when the streak last failed:
@@ -131,19 +144,36 @@ export function createBackoff(clock: Clock): Backoff {
     return {
         cooldownEnd,
 
-        // When to retry after a transient failure: never sooner than the
-        // shortest cooldown, even if the origin is not cooling down.
-        retryAt(origin, deadline) {
-            const end = cooldownEnd(origin) ?? clock.now() + BASE_COOLDOWN_MS;
+        // When to retry a request that must succeed before `deadline`:
+        // after the cooldown, or the shortest one if there is none, and
+        // once more just before the deadline if the cooldown runs past it.
+        retryAt(origin, deadline, failure, lastChance) {
+            if (failure === 'refused') return undefined;
+            if (lastChance && failure !== 'deferred') return undefined;
+            const now = clock.now();
+            const final = deadline - LAST_ATTEMPT_MARGIN_MS;
+            const end = cooldownEnd(origin) ?? now + BASE_COOLDOWN_MS;
             const at = end + clock.random() * RETRY_SPREAD_MS;
-            return at < deadline ? at : undefined;
+            if (at < final) return { at, lastChance: false };
+            if (now < final) return { at: final, lastChance: true };
+            const left = deadline - now;
+            if (left < MIN_LAST_ATTEMPT_WINDOW_MS) return undefined;
+            return { at: now + clock.random() * left, lastChance: true };
         },
 
-        begin(origin) {
+        begin(origin, lastChance) {
             const end = cooldownEnd(origin);
-            if (end !== undefined) return { admitted: false, until: end };
+            const streak = current(origin, clock.now());
+            // A last attempt may probe an origin still cooling down, but
+            // never alongside another probe.
+            const mayProbe =
+                lastChance &&
+                streak?.kind === 'cooling' &&
+                streak.probe === undefined;
+            if (end !== undefined && !mayProbe) {
+                return { admitted: false, until: end };
+            }
             const ticket = ++tickets;
-            const streak = streaks.get(origin);
             if (streak?.kind === 'cooling') streak.probe = ticket;
             return {
                 admitted: true,

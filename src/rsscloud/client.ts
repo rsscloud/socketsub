@@ -17,7 +17,8 @@ export async function pleaseNotify(
     fetcher: Fetcher,
     endpoint: URL,
     callback: RssCloudCallback,
-    feedUrl: string
+    feedUrl: string,
+    lastChance = false
 ): Promise<RequestResult> {
     const form = new URLSearchParams({
         domain: callback.domain,
@@ -29,7 +30,8 @@ export async function pleaseNotify(
     try {
         const res = await fetcher(endpoint.href, {
             form,
-            accept: 'application/json'
+            accept: 'application/json',
+            lastChance
         });
         const reason = parseNotifyResult(res.status, res.body);
         return reason === undefined

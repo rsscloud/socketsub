@@ -12,12 +12,13 @@ export function subscribeAtHub(
     fetcher: Fetcher,
     subscription: HubSubscription,
     secret: string,
-    leaseSeconds: number
+    leaseSeconds: number,
+    lastChance = false
 ): Promise<RequestResult> {
     const form = hubForm('subscribe', subscription);
     form.set('hub.lease_seconds', String(leaseSeconds));
     form.set('hub.secret', secret);
-    return postToHub(fetcher, subscription.hub, form);
+    return postToHub(fetcher, subscription.hub, form, lastChance);
 }
 
 export function unsubscribeAtHub(
@@ -48,10 +49,11 @@ function hubForm(
 async function postToHub(
     fetcher: Fetcher,
     hub: URL,
-    form: URLSearchParams
+    form: URLSearchParams,
+    lastChance = false
 ): Promise<RequestResult> {
     try {
-        const res = await fetcher(hub.href, { form });
+        const res = await fetcher(hub.href, { form, lastChance });
         if (isSuccessStatus(res.status)) return { ok: true };
         const body = res.body.trim().slice(0, 200);
         return {

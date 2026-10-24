@@ -580,7 +580,7 @@ describe('WebSub renewal retries', () => {
         });
         await advance(36_000_000);
         expect(times.map(t => (t - start - RENEW_AT) / MINUTE)).toEqual([
-            0, 1.5, 4, 8.5, 17, 33.5
+            0, 1.5, 4, 8.5, 17, 33.5, 55
         ]);
         const hub = fakeHub(s, HUB);
         const delivery = await hub.deliver(request, '<feed/>', sign('sha256'));

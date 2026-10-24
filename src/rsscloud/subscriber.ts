@@ -32,12 +32,13 @@ export function isRssCloudState(state: FeedState): state is RssCloudState {
 export function createRssCloudSubscriber(deps: RegistryDeps) {
     const callback = rssCloudCallback(deps.config);
 
-    function register(target: RssCloudTarget) {
+    function register(target: RssCloudTarget, lastChance = false) {
         return pleaseNotify(
             deps.fetcher,
             target.endpoint,
             callback,
-            target.topic
+            target.topic,
+            lastChance
         );
     }
 
@@ -46,7 +47,8 @@ export function createRssCloudSubscriber(deps: RegistryDeps) {
             feed,
             target,
             deps.now() + REGISTRATION_TTL_MS,
-            deps.config.rssCloudRenewMs
+            deps.config.rssCloudRenewMs,
+            false
         );
     }
 
@@ -54,34 +56,48 @@ export function createRssCloudSubscriber(deps: RegistryDeps) {
         feed: FeedHandle,
         target: RssCloudTarget,
         expiresAt: number,
-        delayMs: number
+        delayMs: number,
+        lastChance: boolean
     ) {
         feed.transition({
             kind: 'active',
             via: 'rsscloud',
             target,
-            timer: schedule(() => void renew(feed, target, expiresAt), delayMs)
+            timer: schedule(
+                () => void renew(feed, target, expiresAt, lastChance),
+                delayMs
+            )
         });
     }
 
     async function renew(
         feed: FeedHandle,
         target: RssCloudTarget,
-        expiresAt: number
+        expiresAt: number,
+        lastChance: boolean
     ) {
-        const result = await register(target);
+        const result = await register(target, lastChance);
         if (!feed.isLive()) return;
         if (result.ok) {
             activate(feed, target);
             return;
         }
         const { origin } = target.endpoint;
-        if (result.failure !== 'refused') {
-            const at = deps.backoff.retryAt(origin, expiresAt);
-            if (at !== undefined) {
-                scheduleRenewal(feed, target, expiresAt, at - deps.now());
-                return;
-            }
+        const retry = deps.backoff.retryAt(
+            origin,
+            expiresAt,
+            result.failure,
+            lastChance
+        );
+        if (retry) {
+            scheduleRenewal(
+                feed,
+                target,
+                expiresAt,
+                retry.at - deps.now(),
+                retry.lastChance
+            );
+            return;
         }
         const late =
             result.failure !== 'refused'

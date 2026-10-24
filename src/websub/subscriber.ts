@@ -70,12 +70,13 @@ export function createWebSubSubscriber(deps: RegistryDeps) {
         };
     }
 
-    function requestSubscription(target: WebSubTarget) {
+    function requestSubscription(target: WebSubTarget, lastChance = false) {
         return subscribeAtHub(
             deps.fetcher,
             hubSubscription(target),
             target.secret,
-            deps.config.webSubLeaseSeconds
+            deps.config.webSubLeaseSeconds,
+            lastChance
         );
     }
 
@@ -97,7 +98,8 @@ export function createWebSubSubscriber(deps: RegistryDeps) {
             feed,
             target,
             deps.now() + leaseSeconds * 1000,
-            renewSeconds * 1000
+            renewSeconds * 1000,
+            false
         );
     }
 
@@ -105,21 +107,26 @@ export function createWebSubSubscriber(deps: RegistryDeps) {
         feed: FeedHandle,
         target: WebSubTarget,
         expiresAt: number,
-        delayMs: number
+        delayMs: number,
+        lastChance: boolean
     ) {
         feed.transition({
             kind: 'active',
             via: 'websub',
             target,
             renewal: 'scheduled',
-            timer: schedule(() => void renew(feed, target, expiresAt), delayMs)
+            timer: schedule(
+                () => void renew(feed, target, expiresAt, lastChance),
+                delayMs
+            )
         });
     }
 
     async function renew(
         feed: FeedHandle,
         target: WebSubTarget,
-        expiresAt: number
+        expiresAt: number,
+        lastChance: boolean
     ) {
         feed.transition({
             kind: 'active',
@@ -127,16 +134,25 @@ export function createWebSubSubscriber(deps: RegistryDeps) {
             target,
             renewal: 'requested'
         });
-        const result = await requestSubscription(target);
+        const result = await requestSubscription(target, lastChance);
         const found = subscription(target.id);
         if (!found) return;
         if (!result.ok) {
-            if (result.failure !== 'refused') {
-                const at = deps.backoff.retryAt(target.hub.origin, expiresAt);
-                if (at !== undefined) {
-                    scheduleRenewal(feed, target, expiresAt, at - deps.now());
-                    return;
-                }
+            const retry = deps.backoff.retryAt(
+                target.hub.origin,
+                expiresAt,
+                result.failure,
+                lastChance
+            );
+            if (retry) {
+                scheduleRenewal(
+                    feed,
+                    target,
+                    expiresAt,
+                    retry.at - deps.now(),
+                    retry.lastChance
+                );
+                return;
             }
             const late =
                 result.failure !== 'refused'
