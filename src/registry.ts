@@ -6,10 +6,10 @@ import {
     type Config
 } from './config.js';
 import { discover, type Discovery } from './discover.js';
-import type { Fetcher } from './net.js';
-import { pleaseNotify, type NotifyResult } from './rsscloud.js';
+import { errorText, type Fetcher } from './net.js';
+import { pleaseNotify } from './rsscloud.js';
 import { normalizeUrl, sameUrl } from './url.js';
-import { hubRequest, type HubResult } from './websub.js';
+import { subscribeAtHub, unsubscribeAtHub } from './websub.js';
 
 export type PushProtocol = 'rsscloud' | 'websub';
 
@@ -64,6 +64,11 @@ export type FeedState =
       }
     | { kind: 'unsupported'; detail: string }
     | { kind: 'failed'; reason: string; via?: PushProtocol };
+
+type RssCloudOutcome =
+    | { kind: 'subscribed' }
+    | { kind: 'dropped' }
+    | { kind: 'failed'; reason: string };
 
 type FeedSub = {
     key: FeedKey;
@@ -153,9 +158,11 @@ export function createRegistry(deps: RegistryDeps) {
                 () => webSubUnsubscribing.delete(target.id),
                 UNSUBSCRIBE_VERIFY_WINDOW_MS
             ).unref();
-            void requestHub(target, 'unsubscribe').then(result => {
-                if (!result.ok) webSubUnsubscribing.delete(target.id);
-            });
+            void unsubscribeAtHub(deps.fetcher, hubSubscription(target)).then(
+                result => {
+                    if (!result.ok) webSubUnsubscribing.delete(target.id);
+                }
+            );
         }
         feeds.delete(feed.key);
         for (const alias of feed.aliases) {
@@ -194,11 +201,12 @@ export function createRegistry(deps: RegistryDeps) {
 
         let rssCloudFailure: string | undefined;
         if (discovery.rssCloud) {
-            rssCloudFailure = await subscribeRssCloud(feed, {
+            const outcome = await subscribeRssCloud(feed, {
                 endpoint: discovery.rssCloud.endpoint,
                 topic: discovery.finalUrl
             });
-            if (rssCloudFailure === undefined || !isLive(feed)) return;
+            if (outcome.kind !== 'failed') return;
+            rssCloudFailure = outcome.reason;
         }
         if (discovery.webSub) {
             await subscribeWebSub(feed, discovery.webSub, rssCloudFailure);
@@ -218,14 +226,22 @@ export function createRegistry(deps: RegistryDeps) {
     async function subscribeRssCloud(
         feed: FeedSub,
         target: RssCloudTarget
-    ): Promise<string | undefined> {
+    ): Promise<RssCloudOutcome> {
         // The cloud may call our challenge route before pleaseNotify
         // returns, so the feed must already be in a subscribing state.
         transition(feed, { kind: 'subscribing', via: 'rsscloud', target });
-        const result = await registerRssCloud(target);
-        if (!isLive(feed)) return undefined;
-        if (!result.success) {
-            return `rssCloud registration failed: ${result.msg}`;
+        const result = await pleaseNotify(
+            deps.fetcher,
+            target.endpoint,
+            callback,
+            target.topic
+        );
+        if (!isLive(feed)) return { kind: 'dropped' };
+        if (!result.ok) {
+            return {
+                kind: 'failed',
+                reason: `rssCloud registration failed: ${result.reason}`
+            };
         }
         transition(feed, {
             kind: 'active',
@@ -233,7 +249,7 @@ export function createRegistry(deps: RegistryDeps) {
             target,
             renewTimer: scheduleRssCloudRenewal(feed, target)
         });
-        return undefined;
+        return { kind: 'subscribed' };
     }
 
     async function subscribeWebSub(
@@ -256,7 +272,7 @@ export function createRegistry(deps: RegistryDeps) {
                 detail: `${rssCloudFailure}; trying WebSub`
             })
         });
-        const result = await requestHub(target, 'subscribe');
+        const result = await subscribeToHub(target);
         // A teardown during the request already sent the unsubscribe.
         if (result.ok || !webSubFeed(target.id)) return;
         feedKeyByWebSubId.delete(target.id);
@@ -265,37 +281,28 @@ export function createRegistry(deps: RegistryDeps) {
             via: 'websub',
             reason: [
                 rssCloudFailure,
-                `WebSub subscribe failed: ${result.detail}`
+                `WebSub subscribe failed: ${result.reason}`
             ]
                 .filter(Boolean)
                 .join('; ')
         });
     }
 
-    async function requestHub(
-        target: WebSubTarget,
-        mode: 'subscribe' | 'unsubscribe'
-    ): Promise<HubResult> {
-        const common = {
+    function hubSubscription(target: WebSubTarget) {
+        return {
+            hub: target.hub,
             topic: target.topic,
             callback: callbackUrl(deps.config, `/websub/${target.id}`)
         };
-        try {
-            return await hubRequest(
-                deps.fetcher,
-                target.hub,
-                mode === 'subscribe'
-                    ? {
-                          mode,
-                          ...common,
-                          secret: target.secret,
-                          leaseSeconds: deps.config.webSubLeaseSeconds
-                      }
-                    : { mode, ...common }
-            );
-        } catch (err) {
-            return { ok: false, detail: errorText(err) };
-        }
+    }
+
+    function subscribeToHub(target: WebSubTarget) {
+        return subscribeAtHub(
+            deps.fetcher,
+            hubSubscription(target),
+            target.secret,
+            deps.config.webSubLeaseSeconds
+        );
     }
 
     function scheduleWebSubRenewal(
@@ -317,10 +324,10 @@ export function createRegistry(deps: RegistryDeps) {
         };
         return schedule(async () => {
             const before = feed.state;
-            const result = await requestHub(target, 'subscribe');
+            const result = await subscribeToHub(target);
             if (!webSubFeed(target.id)) return;
             if (!result.ok) {
-                fail(`WebSub renewal failed: ${result.detail}`);
+                fail(`WebSub renewal failed: ${result.reason}`);
                 return;
             }
             // A verification that already arrived armed the next renewal.
@@ -340,29 +347,19 @@ export function createRegistry(deps: RegistryDeps) {
         }, renewSeconds * 1000);
     }
 
-    async function registerRssCloud(
-        target: RssCloudTarget
-    ): Promise<NotifyResult> {
-        try {
-            return await pleaseNotify(
-                deps.fetcher,
-                target.endpoint,
-                callback,
-                target.topic
-            );
-        } catch (err) {
-            return { success: false, msg: errorText(err) };
-        }
-    }
-
     function scheduleRssCloudRenewal(
         feed: FeedSub,
         target: RssCloudTarget
     ): Timer {
         return schedule(async () => {
-            const result = await registerRssCloud(target);
+            const result = await pleaseNotify(
+                deps.fetcher,
+                target.endpoint,
+                callback,
+                target.topic
+            );
             if (!isLive(feed)) return;
-            if (result.success) {
+            if (result.ok) {
                 transition(feed, {
                     kind: 'active',
                     via: 'rsscloud',
@@ -374,7 +371,7 @@ export function createRegistry(deps: RegistryDeps) {
             transition(feed, {
                 kind: 'failed',
                 via: 'rsscloud',
-                reason: `rssCloud renewal failed: ${result.msg}`
+                reason: `rssCloud renewal failed: ${result.reason}`
             });
         }, deps.config.rssCloudRenewMs);
     }
@@ -549,13 +546,6 @@ function sameStatus(a: FeedState, b: FeedState): boolean {
 
 function schedule(task: () => void, delayMs: number): Timer {
     return setTimeout(task, Math.min(delayMs, MAX_TIMER_MS));
-}
-
-function errorText(err: unknown): string {
-    if (err instanceof Error) {
-        return err.name === 'TimeoutError' ? 'request timed out' : err.message;
-    }
-    return String(err);
 }
 
 function createLimiter(max: number) {

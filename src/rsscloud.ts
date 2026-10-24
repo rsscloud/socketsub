@@ -2,10 +2,8 @@ import { XMLParser } from 'fast-xml-parser';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { RssCloudCallback } from './config.js';
-import type { Fetcher } from './net.js';
+import { errorText, type Fetcher, type RequestResult } from './net.js';
 import type { Registry } from './registry.js';
-
-export type NotifyResult = { success: boolean; msg: string };
 
 const xml = new XMLParser({
     ignoreAttributes: false,
@@ -18,7 +16,7 @@ export async function pleaseNotify(
     endpoint: URL,
     callback: RssCloudCallback,
     feedUrl: string
-): Promise<NotifyResult> {
+): Promise<RequestResult> {
     const form = new URLSearchParams({
         domain: callback.domain,
         port: String(callback.port),
@@ -26,42 +24,45 @@ export async function pleaseNotify(
         protocol: callback.protocol,
         url1: feedUrl
     });
-    const res = await fetcher(endpoint.href, {
-        form,
-        accept: 'application/json'
-    });
-    return parseNotifyResult(res.status, res.body);
+    try {
+        const res = await fetcher(endpoint.href, {
+            form,
+            accept: 'application/json'
+        });
+        return parseNotifyResult(res.status, res.body);
+    } catch (err) {
+        return { ok: false, reason: errorText(err) };
+    }
 }
 
-function parseNotifyResult(status: number, body: string): NotifyResult {
-    const fallback = {
-        success: false,
-        msg: `unexpected response (HTTP ${status})`
-    };
+function parseNotifyResult(status: number, body: string): RequestResult {
+    const unexpected = `unexpected response (HTTP ${status})`;
+    const result = (success: boolean, msg: string): RequestResult =>
+        success ? { ok: true } : { ok: false, reason: msg };
     const trimmed = body.trim();
     if (trimmed.startsWith('{')) {
         try {
             const json = JSON.parse(trimmed) as Record<string, unknown>;
-            return {
-                success: json.success === true || json.success === 'true',
-                msg: typeof json.msg === 'string' ? json.msg : fallback.msg
-            };
+            return result(
+                json.success === true || json.success === 'true',
+                typeof json.msg === 'string' ? json.msg : unexpected
+            );
         } catch {
-            return fallback;
+            return result(false, unexpected);
         }
     }
     try {
         const doc = xml.parse(trimmed) as {
             notifyResult?: { success?: string; msg?: string };
         };
-        const result = doc.notifyResult;
-        if (!result) return fallback;
-        return {
-            success: result.success === 'true',
-            msg: result.msg ?? fallback.msg
-        };
+        const notifyResult = doc.notifyResult;
+        if (!notifyResult) return result(false, unexpected);
+        return result(
+            notifyResult.success === 'true',
+            notifyResult.msg ?? unexpected
+        );
     } catch {
-        return fallback;
+        return result(false, unexpected);
     }
 }
 

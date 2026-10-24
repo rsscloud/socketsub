@@ -19,6 +19,8 @@ export type Fetcher = (
     request?: FetchRequest
 ) => Promise<FetchResult>;
 
+export type RequestResult = { ok: true } | { ok: false; reason: string };
+
 export type Lookup = (hostname: string) => Promise<string[]>;
 
 export const systemLookup: Lookup = async hostname =>
@@ -132,6 +134,13 @@ async function readCapped(res: Response): Promise<string> {
         chunks.push(chunk);
     }
     return Buffer.concat(chunks).toString('utf8');
+}
+
+export function errorText(err: unknown): string {
+    if (err instanceof Error) {
+        return err.name === 'TimeoutError' ? 'request timed out' : err.message;
+    }
+    return String(err);
 }
 
 export function isSuccessStatus(status: number): boolean {
