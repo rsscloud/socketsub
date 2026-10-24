@@ -39,11 +39,12 @@
             socklog-viewer {
                 flex: 1;
                 min-height: 0;
+                overflow-y: auto;
             }
         </style>
     </head>
     <body>
-        <nav><strong>socketsub</strong><a href="/docs">Docs</a></nav>
+        <nav><strong>socketsub</strong><a href="{{docsPath}}">Docs</a></nav>
         <p>
             Push notifications for RSS and Atom feeds over a WebSocket. Send a
             list of feed URLs, and socketsub tells you when any of them changes,

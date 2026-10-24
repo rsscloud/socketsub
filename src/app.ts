@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
-import { webSocketUrl, type Config } from './config.js';
+import { callbackUrl, webSocketUrl, type Config } from './config.js';
 import { createFetcher, type Lookup } from './net.js';
 import { createRegistry } from './registry.js';
 import { rssCloudRoutes } from './rsscloud/routes.js';
@@ -26,6 +26,8 @@ const docsTemplate = readPage('docs.html');
 function renderPage(template: string, config: Config): string {
     const values: Record<string, string> = {
         wsUrl: webSocketUrl(config),
+        homePath: new URL(callbackUrl(config, '/')).pathname,
+        docsPath: new URL(callbackUrl(config, '/docs')).pathname,
         maxFeedsPerMessage: String(config.maxFeedsPerMessage),
         maxFeedsPerClient: String(config.maxFeedsPerClient),
         maxFeeds: String(config.maxFeeds)

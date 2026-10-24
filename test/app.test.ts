@@ -24,10 +24,18 @@ it('serves the home page with the socklog viewer pointed at the WebSocket URL', 
     expect(res.headers.get('content-type')).toMatch(/text\/html/);
     const html = await res.text();
     expect(html).toContain('<code>wss://sub.example/ws</code>');
+    expect(html).toContain('<a href="/docs">Docs</a>');
     expect(html).toContain(
         '<socklog-viewer id="viewer" url="wss://sub.example/ws">'
     );
     expect(html).not.toContain('{{');
+});
+
+it('links the home page to docs under a PUBLIC_URL path prefix', async () => {
+    const res = await appFor({ PUBLIC_URL: 'https://example.com/sub' }).request(
+        '/'
+    );
+    expect(await res.text()).toContain('<a href="/sub/docs">Docs</a>');
 });
 
 it('serves the docs page with the WebSocket URL and configured limits', async () => {
@@ -41,6 +49,7 @@ it('serves the docs page with the WebSocket URL and configured limits', async ()
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('<pre>ws://localhost:3000/prefix/ws</pre>');
+    expect(html).toContain('<a href="/prefix/">socketsub</a>');
     expect(html).toContain("new WebSocket('ws://localhost:3000/prefix/ws')");
     expect(html).toMatch(/URLs in one message<\/td>\s*<td>7</);
     expect(html).toMatch(/Feeds per connection<\/td>\s*<td>8</);
