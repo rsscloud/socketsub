@@ -1,6 +1,5 @@
 type Lane = { active: number; waiting: (() => void)[] };
 
-// Runs at most `max` tasks per key at once; the rest wait in FIFO order.
 export function createKeyedLimiter(max: number) {
     const lanes = new Map<string, Lane>();
     return async <T>(key: string, task: () => Promise<T>): Promise<T> => {

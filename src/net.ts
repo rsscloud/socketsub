@@ -155,18 +155,16 @@ export function createFetcher(deps: FetcherDeps): Fetcher {
                     url,
                     init(request, deps.timeoutMs)
                 );
-                const answered: Exchange = {
+                exchange = {
                     kind: 'answered',
                     status: res.status,
                     retryAfter: res.headers.get('retry-after')
                 };
                 const location = res.headers.get('location');
                 if (!request.form && isRedirect(res.status) && location) {
-                    exchange = answered;
                     await res.body?.cancel();
                     return { kind: 'redirect', to: new URL(location, url) };
                 }
-                exchange = answered;
                 let body: string;
                 try {
                     body = await readCapped(res, url);

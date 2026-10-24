@@ -1,3 +1,5 @@
+import type { RequestFailure } from './net.js';
+
 const BASE_COOLDOWN_MS = 60_000;
 const COOLDOWN_FACTOR = 2;
 const MAX_COOLDOWN_MS = 3600_000;
@@ -11,8 +13,6 @@ const RETRY_SPREAD_MS = 60_000;
 const LAST_ATTEMPT_MARGIN_MS = 5 * 60_000;
 // Below this, a deferred last attempt has no time left to wait for a slot.
 const MIN_LAST_ATTEMPT_WINDOW_MS = 1000;
-
-import type { RequestFailure } from './net.js';
 
 export type Clock = { now(): number; random(): number };
 
