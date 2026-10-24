@@ -85,7 +85,7 @@ export function createWebSubSubscriber(deps: {
 
     function fail(feed: FeedHandle, target: WebSubTarget, reason: string) {
         feedById.delete(target.id);
-        feed.transition({ kind: 'failed', via: 'websub', reason });
+        feed.fail(reason, 'websub', target.hub);
     }
 
     function scheduleRenewal(

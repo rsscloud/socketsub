@@ -20,16 +20,21 @@ import {
 
 export type FeedKey = string & { __brand: 'FeedKey' };
 
+const MIN_RETRY_MS = 60_000;
+// Feeds rarely add push support, so do not refetch on every subscribe.
+const UNSUPPORTED_RETRY_MS = 3600_000;
+
 export type FeedState =
     | { kind: 'discovering' }
     | RssCloudState
     | WebSubState
-    | { kind: 'unsupported'; detail: string }
-    | { kind: 'failed'; reason: string; via?: PushProtocol };
+    | { kind: 'unsupported'; detail: string; retryAt: number }
+    | { kind: 'failed'; reason: string; via?: PushProtocol; retryAt: number };
 
 export type FeedHandle = {
     readonly state: FeedState;
     transition(state: FeedState): void;
+    fail(reason: string, via: PushProtocol, upstream: URL): void;
     isLive(): boolean;
     addAlias(url: string): void;
     sendUpdate(): void;
@@ -98,6 +103,8 @@ export function createRegistry(deps: RegistryDeps) {
                 return feed.state;
             },
             transition: state => transition(feed, state),
+            fail: (reason, via, upstream) =>
+                transition(feed, failure(reason, via, upstream)),
             isLive: () => isLive(feed),
             addAlias: url => addAlias(feed, url),
             sendUpdate: () => sendUpdate(feed)
@@ -133,6 +140,25 @@ export function createRegistry(deps: RegistryDeps) {
         }
     }
 
+    function failure(
+        reason: string,
+        via: PushProtocol | undefined,
+        upstream: URL
+    ): FeedState {
+        const retryAt = Math.max(
+            deps.now() + MIN_RETRY_MS,
+            deps.backoff.cooldownEnd(upstream.origin) ?? 0
+        );
+        return { kind: 'failed', reason, retryAt, ...(via && { via }) };
+    }
+
+    function canRetry(state: FeedState): boolean {
+        return (
+            (state.kind === 'failed' || state.kind === 'unsupported') &&
+            deps.now() >= state.retryAt
+        );
+    }
+
     function admit(followed: Set<FeedKey>, url: string): Admission {
         const { maxFeedsPerClient, maxFeeds } = deps.config;
         const key = toFeedKey(url);
@@ -156,20 +182,33 @@ export function createRegistry(deps: RegistryDeps) {
 
     function follow(client: Client, url: string, key: FeedKey) {
         const existing = feeds.get(key);
-        if (existing) {
-            existing.clients.set(client, url);
+        if (!existing) {
+            open(key, new Map([[client, url]]));
+            return;
+        }
+        existing.clients.set(client, url);
+        if (!canRetry(existing.state)) {
             client.send(statusMessage(url, existing.state));
             return;
         }
+        // A fresh FeedSub makes every await still pending on the old one
+        // fail its liveness check.
+        drop(existing);
+        open(key, existing.clients);
+    }
+
+    function open(key: FeedKey, clients: Map<Client, string>) {
         const feed: FeedSub = {
             key,
             state: { kind: 'discovering' },
-            clients: new Map([[client, url]]),
+            clients,
             aliases: new Set()
         };
         feeds.set(key, feed);
         addAlias(feed, key);
-        client.send(statusMessage(url, feed.state));
+        for (const [client, url] of clients) {
+            client.send(statusMessage(url, feed.state));
+        }
         void start(feed);
     }
 
@@ -195,14 +234,19 @@ export function createRegistry(deps: RegistryDeps) {
             );
             return;
         }
-        handle.transition(
-            rssCloudFailure === undefined
-                ? {
-                      kind: 'unsupported',
-                      detail: 'feed advertises neither rssCloud nor WebSub'
-                  }
-                : { kind: 'failed', via: 'rsscloud', reason: rssCloudFailure }
-        );
+        if (discovery.rssCloud && rssCloudFailure !== undefined) {
+            handle.fail(
+                rssCloudFailure,
+                'rsscloud',
+                discovery.rssCloud.endpoint
+            );
+            return;
+        }
+        handle.transition({
+            kind: 'unsupported',
+            detail: 'feed advertises neither rssCloud nor WebSub',
+            retryAt: deps.now() + UNSUPPORTED_RETRY_MS
+        });
     }
 
     async function discoverLive(feed: FeedSub): Promise<Discovery | undefined> {
@@ -215,7 +259,10 @@ export function createRegistry(deps: RegistryDeps) {
             );
         } catch (err) {
             if (isLive(feed)) {
-                transition(feed, { kind: 'failed', reason: errorText(err) });
+                transition(
+                    feed,
+                    failure(errorText(err), undefined, new URL(feed.key))
+                );
             }
             return undefined;
         }

@@ -61,11 +61,11 @@ export function createRssCloudSubscriber(deps: {
             activate(feed, target);
             return;
         }
-        feed.transition({
-            kind: 'failed',
-            via: 'rsscloud',
-            reason: `rssCloud renewal failed: ${result.reason}`
-        });
+        feed.fail(
+            `rssCloud renewal failed: ${result.reason}`,
+            'rsscloud',
+            target.endpoint
+        );
     }
 
     return {

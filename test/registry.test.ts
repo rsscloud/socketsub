@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setImmediate } from 'node:timers/promises';
 import { fixture, gate } from './support/fake-net.js';
 import {
     fakeCloud,
     recordingClient,
+    type RecordingClient,
     settle,
     setup
 } from './support/harness.js';
@@ -265,5 +266,137 @@ describe('registry', () => {
                 m => m.type === 'status' && m.state === 'unsupported'
             )
         ).toHaveLength(6);
+    });
+});
+
+describe('retrying a dead feed on a new subscribe', () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const states = (client: RecordingClient) =>
+        client.messages.map(m => (m.type === 'status' ? m.state : m.type));
+
+    it('restarts a failed feed once its retry time passes, once for concurrent subscribers', async () => {
+        const { net, registry } = setup();
+        net.on(FEED, () => new Response(null, { status: 503 }));
+        const first = recordingClient();
+        registry.subscribe(first, [FEED]);
+        await settle();
+        expect(first.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'error',
+            detail: 'feed returned HTTP 503'
+        });
+
+        await vi.advanceTimersByTimeAsync(59_999);
+        const early = recordingClient();
+        registry.subscribe(early, [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(1);
+        expect(early.messages).toEqual([first.messages.at(-1)]);
+
+        await vi.advanceTimersByTimeAsync(1);
+        net.feed(FEED, fixture('none.xml'));
+        const a = recordingClient();
+        const b = recordingClient();
+        registry.subscribe(a, [FEED]);
+        registry.subscribe(b, [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(2);
+        expect(states(first)).toEqual([
+            'pending',
+            'error',
+            'pending',
+            'unsupported'
+        ]);
+        expect(states(early)).toEqual(['error', 'pending', 'unsupported']);
+        expect(states(a)).toEqual(['pending', 'unsupported']);
+        expect(states(b)).toEqual(['pending', 'unsupported']);
+    });
+
+    it('waits out the origin cooldown before restarting a failed feed', async () => {
+        const { net, registry } = setup();
+        net.on(
+            FEED,
+            () =>
+                new Response(null, {
+                    status: 503,
+                    headers: { 'retry-after': '600' }
+                })
+        );
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        await vi.advanceTimersByTimeAsync(599_999);
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(2);
+    });
+
+    it('reports a feed on a cooling host as an error without fetching it', async () => {
+        const { net, registry } = setup();
+        const sibling = 'https://blog.example/other.xml';
+        net.on(FEED, () => new Response(null, { status: 503 }));
+        net.feed(sibling, fixture('none.xml'));
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        const client = recordingClient();
+        registry.subscribe(client, [sibling]);
+        await settle();
+        expect(net.to(sibling)).toHaveLength(0);
+        expect(client.messages.at(-1)).toMatchObject({
+            url: sibling,
+            state: 'error',
+            detail: expect.stringMatching(
+                /^https:\/\/blog\.example failed recently; not contacting it before /
+            )
+        });
+    });
+
+    it('does not cool a host that answered 404', async () => {
+        const { net, registry } = setup();
+        const sibling = 'https://blog.example/other.xml';
+        net.feed(sibling, fixture('none.xml'));
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+        const client = recordingClient();
+        registry.subscribe(client, [sibling]);
+        await settle();
+        expect(client.messages.at(-1)).toMatchObject({ state: 'unsupported' });
+    });
+
+    it('re-discovers an unsupported feed only after an hour', async () => {
+        const s = setup();
+        const { net, registry } = s;
+        net.feed(FEED, fixture('none.xml'));
+        registry.subscribe(recordingClient(), [FEED]);
+        await settle();
+
+        await vi.advanceTimersByTimeAsync(3600_000 - 1);
+        const early = recordingClient();
+        registry.subscribe(early, [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(1);
+        expect(states(early)).toEqual(['unsupported']);
+
+        await vi.advanceTimersByTimeAsync(1);
+        net.feed(FEED, fixture('rss-cloud.xml'));
+        fakeCloud(s, 'http://rpc.rsscloud.example:5337/pleaseNotify');
+        const late = recordingClient();
+        registry.subscribe(late, [FEED]);
+        await settle();
+        expect(net.to(FEED)).toHaveLength(2);
+        expect(late.messages.at(-1)).toMatchObject({
+            state: 'subscribed',
+            via: 'rsscloud'
+        });
     });
 });
