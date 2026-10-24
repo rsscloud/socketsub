@@ -23,7 +23,10 @@ export async function hubRequest(
     const form = new URLSearchParams({
         'hub.mode': request.mode,
         'hub.topic': request.topic,
-        'hub.callback': request.callback
+        'hub.callback': request.callback,
+        // PubSubHubbub 0.3 hubs (WordPress.com among them) reject requests
+        // without hub.verify; WebSub hubs ignore it.
+        'hub.verify': 'async'
     });
     if (request.mode === 'subscribe') {
         form.set('hub.lease_seconds', String(request.leaseSeconds));

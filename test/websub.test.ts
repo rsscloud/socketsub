@@ -48,7 +48,8 @@ describe('WebSub subscription', () => {
         expect(form).toMatchObject({
             'hub.mode': 'subscribe',
             'hub.topic': 'https://blog.example/atom.xml',
-            'hub.lease_seconds': '86400'
+            'hub.lease_seconds': '86400',
+            'hub.verify': 'async'
         });
         expect(form['hub.callback']).toMatch(
             /^https:\/\/sub\.example\/websub\/[0-9a-f-]{36}$/
