@@ -4,6 +4,10 @@ A WebSocket bridge for feed update notifications. Clients send a list of RSS or
 Atom feed URLs. socketsub subscribes to each feed through rssCloud or WebSub
 and sends the client a message whenever a feed changes.
 
+Hosted version available at <https://sub.rsscloud.io/>. Its WebSocket endpoint
+is `wss://sub.rsscloud.io/ws`, and the client protocol is documented at
+<https://sub.rsscloud.io/docs>.
+
 For each feed, socketsub fetches the feed and looks for push support:
 
 1. rssCloud, from `<source:cloud>` or the RSS `<cloud>` element.
