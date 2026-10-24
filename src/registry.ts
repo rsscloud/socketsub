@@ -164,21 +164,8 @@ export function createRegistry(deps: RegistryDeps) {
     }
 
     async function start(feed: FeedSub) {
-        let discovery: Discovery | undefined;
-        try {
-            discovery = await limit(() =>
-                isLive(feed)
-                    ? discover(deps.fetcher, feed.key)
-                    : Promise.resolve(undefined)
-            );
-        } catch (err) {
-            if (isLive(feed)) {
-                transition(feed, { kind: 'failed', reason: errorText(err) });
-            }
-            return;
-        }
-        if (!discovery || !isLive(feed)) return;
-        addAlias(feed, discovery.finalUrl);
+        const discovery = await discoverLive(feed);
+        if (!discovery) return;
         const handle = handleFor(feed);
 
         let rssCloudFailure: string | undefined;
@@ -198,8 +185,7 @@ export function createRegistry(deps: RegistryDeps) {
             );
             return;
         }
-        transition(
-            feed,
+        handle.transition(
             rssCloudFailure === undefined
                 ? {
                       kind: 'unsupported',
@@ -207,6 +193,25 @@ export function createRegistry(deps: RegistryDeps) {
                   }
                 : { kind: 'failed', via: 'rsscloud', reason: rssCloudFailure }
         );
+    }
+
+    async function discoverLive(feed: FeedSub): Promise<Discovery | undefined> {
+        let discovery: Discovery | undefined;
+        try {
+            discovery = await limit(() =>
+                isLive(feed)
+                    ? discover(deps.fetcher, feed.key)
+                    : Promise.resolve(undefined)
+            );
+        } catch (err) {
+            if (isLive(feed)) {
+                transition(feed, { kind: 'failed', reason: errorText(err) });
+            }
+            return undefined;
+        }
+        if (!discovery || !isLive(feed)) return undefined;
+        addAlias(feed, discovery.finalUrl);
+        return discovery;
     }
 
     const rssCloud: RssCloudCallbacks = {
