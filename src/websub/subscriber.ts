@@ -1,7 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { callbackUrl, type Config } from '../config.js';
-import type { Fetcher } from '../net.js';
-import type { FeedHandle, FeedState } from '../registry.js';
+import { callbackUrl } from '../config.js';
+import type { FeedHandle, FeedState, RegistryDeps } from '../registry.js';
 import { schedule, type Timer } from '../timer.js';
 import { sameUrl } from '../url.js';
 import {
@@ -51,10 +50,7 @@ export function isWebSubState(state: FeedState): state is WebSubState {
     );
 }
 
-export function createWebSubSubscriber(deps: {
-    config: Config;
-    fetcher: Fetcher;
-}) {
+export function createWebSubSubscriber(deps: RegistryDeps) {
     const feedById = new Map<string, FeedHandle>();
     const unsubscribing = new Map<string, WebSubTarget>();
 
@@ -74,43 +70,63 @@ export function createWebSubSubscriber(deps: {
         };
     }
 
-    function requestSubscription(target: WebSubTarget) {
+    function requestSubscription(target: WebSubTarget, lastChance = false) {
         return subscribeAtHub(
             deps.fetcher,
             hubSubscription(target),
             target.secret,
-            deps.config.webSubLeaseSeconds
+            deps.config.webSubLeaseSeconds,
+            lastChance
         );
     }
 
     function fail(feed: FeedHandle, target: WebSubTarget, reason: string) {
         feedById.delete(target.id);
-        feed.transition({ kind: 'failed', via: 'websub', reason });
+        feed.fail(reason, 'websub', target.hub.origin);
+    }
+
+    function verified(
+        feed: FeedHandle,
+        target: WebSubTarget,
+        leaseSeconds: number
+    ) {
+        const renewSeconds = Math.max(
+            MIN_RENEW_SECONDS,
+            Math.floor(leaseSeconds * RENEW_AT_LEASE_FRACTION)
+        );
+        scheduleRenewal(
+            feed,
+            target,
+            deps.now() + leaseSeconds * 1000,
+            renewSeconds * 1000,
+            false
+        );
     }
 
     function scheduleRenewal(
         feed: FeedHandle,
         target: WebSubTarget,
-        leaseSeconds: number
-    ): Timer {
-        const renewSeconds = Math.max(
-            MIN_RENEW_SECONDS,
-            Math.floor(leaseSeconds * RENEW_AT_LEASE_FRACTION)
-        );
-        const graceSeconds = Math.max(
-            MIN_RENEW_SECONDS,
-            leaseSeconds - renewSeconds
-        );
-        return schedule(
-            () => void renew(feed, target, graceSeconds),
-            renewSeconds * 1000
-        );
+        expiresAt: number,
+        delayMs: number,
+        lastChance: boolean
+    ) {
+        feed.transition({
+            kind: 'active',
+            via: 'websub',
+            target,
+            renewal: 'scheduled',
+            timer: schedule(
+                () => void renew(feed, target, expiresAt, lastChance),
+                delayMs
+            )
+        });
     }
 
     async function renew(
         feed: FeedHandle,
         target: WebSubTarget,
-        graceSeconds: number
+        expiresAt: number,
+        lastChance: boolean
     ) {
         feed.transition({
             kind: 'active',
@@ -118,11 +134,35 @@ export function createWebSubSubscriber(deps: {
             target,
             renewal: 'requested'
         });
-        const result = await requestSubscription(target);
+        const result = await requestSubscription(target, lastChance);
         const found = subscription(target.id);
         if (!found) return;
         if (!result.ok) {
-            fail(feed, target, `WebSub renewal failed: ${result.reason}`);
+            const retry = deps.backoff.retryAt(
+                target.hub.origin,
+                expiresAt,
+                result.failure,
+                lastChance
+            );
+            if (retry) {
+                scheduleRenewal(
+                    feed,
+                    target,
+                    expiresAt,
+                    retry.at - deps.now(),
+                    retry.lastChance
+                );
+                return;
+            }
+            const late =
+                result.failure !== 'refused'
+                    ? '; the lease ends before the hub can be retried'
+                    : '';
+            fail(
+                feed,
+                target,
+                `WebSub renewal failed: ${result.reason}${late}`
+            );
             return;
         }
         if (
@@ -143,7 +183,7 @@ export function createWebSubSubscriber(deps: {
                         target,
                         'WebSub hub did not verify the renewal before the lease ended'
                     ),
-                graceSeconds * 1000
+                Math.max(MIN_RENEW_SECONDS * 1000, expiresAt - deps.now())
             )
         });
     }
@@ -162,18 +202,11 @@ export function createWebSubSubscriber(deps: {
             if (!found || !sameUrl(found.state.target.topic, request.topic)) {
                 return false;
             }
-            const { feed, state } = found;
-            feed.transition({
-                kind: 'active',
-                via: 'websub',
-                target: state.target,
-                renewal: 'scheduled',
-                timer: scheduleRenewal(
-                    feed,
-                    state.target,
-                    request.leaseSeconds ?? deps.config.webSubLeaseSeconds
-                )
-            });
+            verified(
+                found.feed,
+                found.state.target,
+                request.leaseSeconds ?? deps.config.webSubLeaseSeconds
+            );
             return true;
         },
 

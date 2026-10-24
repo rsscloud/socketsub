@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createBackoff } from '../src/backoff.js';
 import { discover } from '../src/discover.js';
 import { createFetcher } from '../src/net.js';
 import { createFakeNet, fixture, type FakeNet } from './support/fake-net.js';
@@ -10,7 +11,8 @@ const fetcherFor = (net: FakeNet) =>
         fetch: net.fetch,
         lookup: async () => ['93.184.215.14'],
         timeoutMs: 1000,
-        allowPrivateHosts: false
+        allowPrivateHosts: false,
+        backoff: createBackoff({ now: Date.now, random: Math.random })
     });
 
 async function discoverFixture(name: string, headers?: Record<string, string>) {

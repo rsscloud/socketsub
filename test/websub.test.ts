@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixture, gate } from './support/fake-net.js';
 import {
+    failingUpstream,
     fakeCloud,
     fakeHub,
     recordingClient,
@@ -333,7 +334,7 @@ describe('WebSub teardown', () => {
 
 describe('WebSub renewal', () => {
     beforeEach(() => {
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     });
     afterEach(() => {
         vi.useRealTimers();
@@ -488,5 +489,112 @@ describe('WebSub renewal', () => {
         await vi.advanceTimersByTimeAsync(10_000_000);
         await settle();
         expect(hub.subscribes()).toHaveLength(1);
+    });
+});
+
+describe('WebSub renewal retries', () => {
+    const MINUTE = 60_000;
+    const LEASE = '36000';
+    const RENEW_AT = 32_400_000;
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    async function advance(ms: number) {
+        await vi.advanceTimersByTimeAsync(ms);
+        await settle();
+    }
+
+    async function verified() {
+        const s = hubFeed();
+        const hub = fakeHub(s, HUB);
+        const client = recordingClient();
+        s.registry.subscribe(client, [FEED]);
+        await settle();
+        const request = hub.subscribes()[0];
+        await hub.verify(request, { 'hub.lease_seconds': LEASE });
+        return { s, client, request, start: Date.now() };
+    }
+
+    it('stays subscribed and retries a failed renewal with growing backoff', async () => {
+        const { s, client, start } = await verified();
+        const times = failingUpstream(s, HUB);
+        await advance(RENEW_AT + 4 * MINUTE);
+        expect(times.map(t => (t - start - RENEW_AT) / MINUTE)).toEqual([
+            0, 1.5, 4
+        ]);
+        expect(client.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'subscribed',
+            via: 'websub'
+        });
+        const sent = client.messages.length;
+
+        const hub = fakeHub(s, HUB);
+        await advance(4.5 * MINUTE);
+        expect(hub.subscribes()).toHaveLength(5);
+        await hub.verify(hub.subscribes()[4], { 'hub.lease_seconds': LEASE });
+        await advance(RENEW_AT - 1);
+        expect(hub.subscribes()).toHaveLength(5);
+        await advance(1);
+        expect(hub.subscribes()).toHaveLength(6);
+        expect(client.messages).toHaveLength(sent);
+    });
+
+    it.each([
+        ['unsubscribes', 'unsubscribe'],
+        ['disconnects', 'close']
+    ] as const)(
+        'cancels the scheduled retry when the last client %s during backoff',
+        async (_label, leave) => {
+            const { s, client } = await verified();
+            const times = failingUpstream(s, HUB);
+            await advance(RENEW_AT);
+            expect(times).toHaveLength(1);
+
+            if (leave === 'unsubscribe') {
+                s.registry.unsubscribe(client, [FEED]);
+            } else {
+                s.registry.removeClient(client);
+            }
+            await advance(Number(LEASE) * 1000);
+            expect(times).toHaveLength(1);
+        }
+    );
+
+    it('fails before the lease ends when renewals keep failing', async () => {
+        const { s, client, request, start } = await verified();
+        const times = failingUpstream(s, HUB);
+        await advance(36_000_000);
+        expect(client.messages.at(-1)).toEqual({
+            type: 'status',
+            url: FEED,
+            state: 'error',
+            via: 'websub',
+            detail: 'WebSub renewal failed: hub returned HTTP 503; the lease ends before the hub can be retried'
+        });
+        await advance(36_000_000);
+        expect(times.map(t => (t - start - RENEW_AT) / MINUTE)).toEqual([
+            0, 1.5, 4, 8.5, 17, 33.5, 55
+        ]);
+        const hub = fakeHub(s, HUB);
+        const delivery = await hub.deliver(request, '<feed/>', sign('sha256'));
+        expect(delivery.status).toBe(410);
+    });
+
+    it('fails a refused renewal right away', async () => {
+        const { s, client, start } = await verified();
+        const times = failingUpstream(s, HUB, 400);
+        await advance(RENEW_AT);
+        expect(times.map(t => t - start)).toEqual([RENEW_AT]);
+        expect(client.messages.at(-1)).toMatchObject({
+            state: 'error',
+            detail: 'WebSub renewal failed: hub returned HTTP 400'
+        });
     });
 });

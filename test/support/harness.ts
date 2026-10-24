@@ -11,13 +11,18 @@ export function testConfig(env: Record<string, string> = {}) {
     return loadConfig({ PUBLIC_URL: 'https://sub.example', ...env });
 }
 
-export function setup(env: Record<string, string> = {}) {
+export function setup(
+    env: Record<string, string> = {},
+    random: () => number = () => 0.5
+) {
     const net = createFakeNet();
     const config = testConfig(env);
     const created = createApp({
         config,
         fetch: net.fetch,
-        lookup: async () => ['93.184.215.14']
+        lookup: async () => ['93.184.215.14'],
+        now: () => Date.now(),
+        random
     });
     return { net, config, ...created };
 }
@@ -203,4 +208,30 @@ export function fakeHub(env: Setup, hubUrl: string, status = 202) {
             });
         }
     };
+}
+
+// Deterministic stand-in for Math.random (mulberry32).
+export function seededRandom(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let t = state;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+export function failingUpstream(
+    env: Setup,
+    url: string,
+    status = 503,
+    headers: Record<string, string> = {}
+): number[] {
+    const times: number[] = [];
+    env.net.on(url, () => {
+        times.push(Date.now());
+        return new Response(null, { status, headers });
+    });
+    return times;
 }

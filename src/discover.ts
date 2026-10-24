@@ -1,5 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
-import { isSuccessStatus, type Fetcher } from './net.js';
+import {
+    FetchError,
+    isSuccessStatus,
+    statusFailure,
+    type Fetcher
+} from './net.js';
 import { isHttpUrl } from './url.js';
 
 export type Discovery = {
@@ -31,7 +36,11 @@ export async function discover(
         accept: 'application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8'
     });
     if (!isSuccessStatus(res.status)) {
-        throw new Error(`feed returned HTTP ${res.status}`);
+        throw new FetchError(
+            `feed returned HTTP ${res.status}`,
+            new URL(res.url).origin,
+            statusFailure(res.status)
+        );
     }
     return parseDiscovery(res.url, res.body, res.headers.get('link'));
 }

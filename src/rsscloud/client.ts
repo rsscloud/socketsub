@@ -1,6 +1,11 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { RssCloudCallback } from '../config.js';
-import { errorText, type Fetcher, type RequestResult } from '../net.js';
+import {
+    failedRequest,
+    statusFailure,
+    type Fetcher,
+    type RequestResult
+} from '../net.js';
 
 const xml = new XMLParser({
     ignoreAttributes: false,
@@ -12,7 +17,8 @@ export async function pleaseNotify(
     fetcher: Fetcher,
     endpoint: URL,
     callback: RssCloudCallback,
-    feedUrl: string
+    feedUrl: string,
+    lastChance = false
 ): Promise<RequestResult> {
     const form = new URLSearchParams({
         domain: callback.domain,
@@ -24,18 +30,23 @@ export async function pleaseNotify(
     try {
         const res = await fetcher(endpoint.href, {
             form,
-            accept: 'application/json'
+            accept: 'application/json',
+            lastChance
         });
-        return parseNotifyResult(res.status, res.body);
+        const reason = parseNotifyResult(res.status, res.body);
+        return reason === undefined
+            ? { ok: true }
+            : { ok: false, reason, failure: statusFailure(res.status) };
     } catch (err) {
-        return { ok: false, reason: errorText(err) };
+        return failedRequest(err);
     }
 }
 
-function parseNotifyResult(status: number, body: string): RequestResult {
+// The cloud's reason for refusing, or undefined when it accepted.
+function parseNotifyResult(status: number, body: string): string | undefined {
     const unexpected = `unexpected response (HTTP ${status})`;
-    const result = (success: boolean, msg: string): RequestResult =>
-        success ? { ok: true } : { ok: false, reason: msg };
+    const result = (success: boolean, msg: string) =>
+        success ? undefined : msg;
     const trimmed = body.trim();
     if (trimmed.startsWith('{')) {
         try {

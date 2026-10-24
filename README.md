@@ -17,6 +17,39 @@ per feed. When the last client for a feed disconnects, socketsub unsubscribes
 from WebSub or stops renewing the rssCloud registration. State is held in
 memory only.
 
+## Failures and retries
+
+socketsub tracks failures per server: the feed's host, the rssCloud server, or
+the WebSub hub. It sends at most 4 requests to one server at a time. The rest
+wait in order, and each request's timeout starts when it is sent.
+
+A network error, timeout, HTTP 5xx, or 429 puts that server on a cooldown. A
+response body that stalls past the timeout counts as a timeout. A host name
+that does not resolve starts no cooldown, because no server was contacted. The
+cooldown starts at 1 minute, doubles with each further failure up to 1 hour,
+and varies by 20%. A `Retry-After` header on a 429 or 503 can lengthen it, up to
+6 hours. socketsub sends nothing to a server during its cooldown. After it, one
+request tests the server before the others go. Each feed that was waiting
+retries at its own random time in the minute after the cooldown ends. A success
+halves the failure count, so a server that fails again soon after it recovers
+gets a longer cooldown. Other 4xx answers and an rssCloud refusal fail the feed
+but start no cooldown.
+
+When a renewal fails for any reason except a 4xx answer or an rssCloud refusal,
+the feed stays `subscribed`, because the old registration or lease still holds.
+socketsub retries after the server's cooldown, or after at least 1 minute. The
+registration ends 25 hours after the last rssCloud success, and the WebSub lease
+ends when the hub said it would. If the next retry would land within 5 minutes
+of that end, socketsub makes one last attempt 5 minutes before it. That attempt
+goes out even if the server is still on a cooldown, unless another request is
+already testing the server. If the last attempt fails, or the end passes, the
+feed moves to `error`.
+
+A feed in `error` or `unsupported` stays that way while clients follow it. A
+new subscribe to it starts over from discovery once enough time has passed. For
+`error`, that is the end of the server's cooldown and at least 1 minute. For
+`unsupported`, it is 1 hour. A subscribe before then gets the current status.
+
 ## WebSocket protocol
 
 Connect to `/ws` and send JSON text messages. Each has a `type` and a `urls`
